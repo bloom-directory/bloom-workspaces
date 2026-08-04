@@ -1,0 +1,35 @@
+[Unit]
+Description=Bloom Workspaces Firecracker node agent (install as bloom-workspaces-agent.service)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=bloom-workspaces
+WorkingDirectory=/opt/bloom-workspaces
+EnvironmentFile=/etc/bloom-workspaces/agent.env
+ExecStart=/usr/bin/node /opt/bloom-workspaces/dist/server/agent/main.js
+Restart=always
+RestartSec=2
+KillMode=control-group
+TimeoutStopSec=15
+LimitNOFILE=65536
+TasksMax=512
+MemoryMax=12G
+CPUQuota=800%
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETGID CAP_SETUID CAP_SYS_ADMIN CAP_SYS_CHROOT
+AmbientCapabilities=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETGID CAP_SETUID CAP_SYS_ADMIN CAP_SYS_CHROOT
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bloom-workspaces /run/bloom-workspaces /run/bloom-jailer
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

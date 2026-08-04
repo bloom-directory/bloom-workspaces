@@ -1,0 +1,49 @@
+{
+  "name": "bloom-workspaces",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bloom-directory/bloom-workspaces.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "npm run build:web && npm run build:server",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build:web": "vite build",
+    "check": "npm run typecheck && npm test",
+    "dev": "npm run build && BLOOM_DEV_AUTH=1 BLOOM_RUNTIME=process BLOOM_DAILY_PER_WALLET=100 BLOOM_DAILY_PER_IP=100 node dist/server/dev.js",
+    "dev:vm": "npm run build && BLOOM_DEV_AUTH=1 BLOOM_RUNTIME=qemu BLOOM_DAILY_PER_WALLET=100 BLOOM_DAILY_PER_IP=100 node dist/server/dev.js",
+    "dev:firecracker": "npm run build && BLOOM_DEV_AUTH=1 BLOOM_RUNTIME=firecracker BLOOM_DAILY_PER_WALLET=100 BLOOM_DAILY_PER_IP=100 node dist/server/dev.js",
+    "start:agent": "node dist/server/agent/main.js",
+    "start:control": "node dist/server/control/main.js",
+    "smoke:live": "node scripts/smoke-live.mjs",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "express": "^5.2.1",
+    "node-pty": "^1.1.0",
+    "viem": "^2.55.10",
+    "ws": "^8.18.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.10.0",
+    "@types/supertest": "^6.0.3",
+    "@types/ws": "^8.18.1",
+    "supertest": "^7.1.4",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.0",
+    "vitest": "^4.0.6"
+  }
+}

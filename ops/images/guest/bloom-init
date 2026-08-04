@@ -1,0 +1,60 @@
+#!/bin/busybox sh
+
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+/bin/busybox --install -s >/dev/null 2>&1 || true
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mkdir -p /dev/pts /run /tmp /workspace
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+mount -t tmpfs -o nosuid,nodev tmpfs /run 2>/dev/null || true
+mount -t tmpfs -o nosuid,nodev tmpfs /tmp 2>/dev/null || true
+hostname bloom-workspace
+chmod 700 /workspace
+
+ip link set lo up 2>/dev/null || true
+if ip link show eth0 >/dev/null 2>&1; then
+  ip link set eth0 up
+  udhcpc -i eth0 -q -n -t 3 >/dev/null 2>&1 || true
+fi
+
+deadline=""
+for argument in $(cat /proc/cmdline); do
+  case "$argument" in bloom_deadline=*) deadline="${argument#bloom_deadline=}" ;; esac
+done
+
+if [ -n "$deadline" ]; then
+  (
+    while :; do
+      if [ "$(date +%s)" -ge "$deadline" ]; then
+        echo "Bloom workspace lease expired; powering off." >/dev/ttyS0
+        sync
+        poweroff -f
+      fi
+      sleep 1
+    done
+  ) &
+fi
+
+cat >/dev/ttyS0 <<'BANNER'
+
+  Bloom Workspace
+  ----------------
+  Disposable root shell. Store only temporary data here.
+  Never paste a seed phrase, funded private key, or production token.
+
+BANNER
+
+if [ -x /usr/local/sbin/bloom-vsock-agent ]; then
+  while :; do
+    /usr/local/sbin/bloom-vsock-agent
+    echo "Bloom guest agent stopped; restarting." >/dev/ttyS0
+    sleep 1
+  done
+else
+  while :; do
+    setsid /bin/ash -l </dev/ttyS0 >/dev/ttyS0 2>&1
+    echo "Shell exited. Press Enter for a new shell." >/dev/ttyS0
+    sleep 1
+  done
+fi

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Disposable, wallet-authenticated Bloom workspaces." />
+    <title>Bloom Workspaces</title>
+  </head>
+  <body>
+    <main>
+      <nav>
+        <a class="brand" href="/" aria-label="Bloom Workspaces home">
+          <span class="mark">B</span><span>Bloom Workspaces</span>
+        </a>
+        <span id="status" class="pill">Checking…</span>
+      </nav>
+
+      <section class="hero">
+        <p class="eyebrow">Remote compute, without the install</p>
+        <h1>A disposable Linux workspace,<br />opened from your browser.</h1>
+        <p class="lede">Sign in with a wallet. Get an isolated, short-lived machine. Keep your keys on your device.</p>
+        <div id="auth-actions" class="actions">
+          <button id="connect" class="primary">Connect wallet</button>
+          <button id="dev-login" class="secondary hidden">Local demo sign-in</button>
+        </div>
+        <p id="message" class="message" role="status"></p>
+      </section>
+
+      <section id="dashboard" class="dashboard hidden">
+        <div class="panel workspace-panel">
+          <div>
+            <p class="eyebrow">Your workspace</p>
+            <h2 id="workspace-title">Ready when you are</h2>
+            <p id="workspace-detail" class="muted">One workspace per wallet. Sessions expire automatically.</p>
+          </div>
+          <div class="actions">
+            <button id="create" class="primary">Create workspace</button>
+            <button id="stop" class="danger hidden">Destroy now</button>
+          </div>
+          <div id="turnstile" class="hidden" aria-label="Human verification"></div>
+        </div>
+
+        <div id="terminal-wrap" class="terminal-shell hidden">
+          <div class="terminal-bar">
+            <div class="lights"><i></i><i></i><i></i></div>
+            <span id="lease">Connecting…</span>
+          </div>
+          <div id="terminal" aria-label="Workspace terminal"></div>
+        </div>
+      </section>
+
+      <section class="principles">
+        <article><span>01</span><h3>Actually isolated</h3><p>Public deployments accept only microVM runtimes. A shell never runs in the web control plane.</p></article>
+        <article><span>02</span><h3>Hard expiry</h3><p>The node destroys expired machines even if the browser, database, or network is unavailable.</p></article>
+        <article><span>03</span><h3>No signing keys</h3><p>The workspace is untrusted compute. Funded wallets and Bloom’s approval core stay elsewhere.</p></article>
+      </section>
+    </main>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

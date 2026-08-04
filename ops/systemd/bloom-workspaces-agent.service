@@ -1,0 +1,39 @@
+[Unit]
+Description=Bloom Workspaces node agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bloom-agent
+Group=bloom-workspaces
+SupplementaryGroups=kvm
+WorkingDirectory=/opt/bloom-workspaces
+EnvironmentFile=/etc/bloom-workspaces/agent.env
+ExecStart=/usr/bin/node /opt/bloom-workspaces/dist/server/agent/main.js
+Restart=always
+RestartSec=2
+KillMode=control-group
+TimeoutStopSec=15
+LimitNOFILE=65536
+TasksMax=512
+MemoryMax=12G
+CPUQuota=800%
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bloom-workspaces /run/bloom-workspaces
+RestrictSUIDSGID=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
