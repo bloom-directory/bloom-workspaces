@@ -30,9 +30,9 @@ export class AgentClient {
   }
   cancelJob(id: string, jobId: string) { return this.request<JobStatus>("DELETE", `/v1/workspaces/${encodeURIComponent(id)}/jobs/${encodeURIComponent(jobId)}`); }
   bloomStatus(id: string) { return this.request<BloomGuestStatus>("GET", `/v1/workspaces/${encodeURIComponent(id)}/bloom`); }
-  signingPending(id: string) { return this.request<{ requests: { requestId: string; method: string; params: unknown[] }[] }>("GET", `/v1/workspaces/${encodeURIComponent(id)}/signing/pending`); }
-  signingRequest(id: string, method: string, params: unknown[]) { return this.request<{ requestId: string }>("POST", `/v1/workspaces/${encodeURIComponent(id)}/signing/request`, { method, params }); }
-  signingResolve(id: string, requestId: string, resolution: { result?: unknown; error?: string }) { return this.request<Record<string, never>>("POST", `/v1/workspaces/${encodeURIComponent(id)}/signing/resolve`, { requestId, ...resolution }); }
+  outboxPending(id: string) { return this.request<{ requests: { id: string; chain: string; wallet: string; planMd: string }[] }>("GET", `/v1/workspaces/${encodeURIComponent(id)}/outbox/pending`); }
+  outboxConfirm(id: string, body: { id: string; chain: string; wallet: string; confirmText: string }) { return this.request<Record<string, never>>("POST", `/v1/workspaces/${encodeURIComponent(id)}/outbox/confirm`, body); }
+  outboxCancel(id: string, body: { id: string; chain: string; wallet: string }) { return this.request<Record<string, never>>("POST", `/v1/workspaces/${encodeURIComponent(id)}/outbox/cancel`, body); }
   connections(id: string) { return this.request<{ connections: Record<"ssh" | "nfs", { status: "available" | "disabled" | "unsupported"; reason: string; instructions: string[] }> }>("GET", `/v1/workspaces/${encodeURIComponent(id)}/connections`); }
   issueSsh(id: string, body: SshLeaseBody) { return this.request<AgentSshLeaseGrant>("POST", `/v1/workspaces/${encodeURIComponent(id)}/connections/ssh`, body); }
   revokeSsh(id: string, leaseId: string) { return this.request<void>("DELETE", `/v1/workspaces/${encodeURIComponent(id)}/connections/ssh/${encodeURIComponent(leaseId)}`); }

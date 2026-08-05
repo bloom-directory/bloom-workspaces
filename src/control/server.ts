@@ -238,21 +238,25 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
       response.json(await workspaces.bloomStatus(session.wallet, String(request.params.id ?? "")));
     } catch (error) { next(error); }
   });
-  app.get("/api/workspaces/:id/signing/pending", requireSession, async (request, response, next) => {
+  app.get("/api/workspaces/:id/outbox/pending", requireSession, async (request, response, next) => {
     try {
       const { session } = response.locals.context as { session: Session };
-      response.json(await workspaces.signingPending(session.wallet, String(request.params.id ?? "")));
+      response.json(await workspaces.outboxPending(session.wallet, String(request.params.id ?? "")));
     } catch (error) { next(error); }
   });
-  app.post("/api/workspaces/:id/signing/resolve", requireSession, async (request, response, next) => {
+  app.post("/api/workspaces/:id/outbox/confirm", requireSession, async (request, response, next) => {
     try {
       const { session } = response.locals.context as { session: Session };
-      const body = z.object({
-        requestId: z.string().min(1).max(64),
-        result: z.unknown().optional(),
-        error: z.string().min(1).max(1024).optional(),
-      }).refine((v) => v.result !== undefined || v.error !== undefined, "either result or error is required").parse(request.body);
-      await workspaces.signingResolve(session.wallet, String(request.params.id ?? ""), body.requestId, { ...(body.result !== undefined ? { result: body.result } : {}), ...(body.error !== undefined ? { error: body.error } : {}) });
+      const body = z.object({ id: z.string().min(1).max(64), chain: z.string().min(1).max(32), wallet: z.string().min(1).max(64), confirmText: z.string().min(1) }).strict().parse(request.body);
+      await workspaces.outboxConfirm(session.wallet, String(request.params.id ?? ""), body);
+      response.status(204).end();
+    } catch (error) { next(error); }
+  });
+  app.post("/api/workspaces/:id/outbox/cancel", requireSession, async (request, response, next) => {
+    try {
+      const { session } = response.locals.context as { session: Session };
+      const body = z.object({ id: z.string().min(1).max(64), chain: z.string().min(1).max(32), wallet: z.string().min(1).max(64) }).strict().parse(request.body);
+      await workspaces.outboxCancel(session.wallet, String(request.params.id ?? ""), body);
       response.status(204).end();
     } catch (error) { next(error); }
   });

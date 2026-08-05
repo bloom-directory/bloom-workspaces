@@ -151,17 +151,26 @@ export class WorkspaceService {
     catch (error) { throw this.agentWorkspaceError(error); }
   }
 
-  async signingPending(wallet: string, id: string) {
-    const row = this.ownedRunning(wallet, id, "signing_pending");
-    try { return await this.agent.signingPending(row.id); }
+  async outboxPending(wallet: string, id: string) {
+    const row = this.ownedRunning(wallet, id, "outbox_pending");
+    try { return await this.agent.outboxPending(row.id); }
     catch (error) { throw this.agentWorkspaceError(error); }
   }
 
-  async signingResolve(wallet: string, id: string, requestId: string, resolution: { result?: unknown; error?: string }) {
-    const row = this.ownedRunning(wallet, id, "signing_resolve");
+  async outboxConfirm(wallet: string, id: string, body: { id: string; chain: string; wallet: string; confirmText: string }) {
+    const row = this.ownedRunning(wallet, id, "outbox_confirm");
     try {
-      const result = await this.agent.signingResolve(row.id, requestId, resolution);
-      audit(this.db, "workspace.signing_resolved", row.wallet, row.id, { requestId, approved: resolution.error === undefined });
+      const result = await this.agent.outboxConfirm(row.id, body);
+      audit(this.db, "workspace.outbox_confirmed", row.wallet, row.id, { txId: body.id, chain: body.chain, wallet: body.wallet });
+      return result;
+    } catch (error) { throw this.agentWorkspaceError(error); }
+  }
+
+  async outboxCancel(wallet: string, id: string, body: { id: string; chain: string; wallet: string }) {
+    const row = this.ownedRunning(wallet, id, "outbox_cancel");
+    try {
+      const result = await this.agent.outboxCancel(row.id, body);
+      audit(this.db, "workspace.outbox_cancelled", row.wallet, row.id, { txId: body.id, chain: body.chain, wallet: body.wallet });
       return result;
     } catch (error) { throw this.agentWorkspaceError(error); }
   }

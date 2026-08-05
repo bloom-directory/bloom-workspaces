@@ -88,10 +88,6 @@ def main() -> int:
     jobs_cancel = jobs.add_parser("cancel")
     jobs_cancel.add_argument("job_id")
 
-    sign = commands.add_parser("sign", help="request a wallet signature through the browser relay")
-    sign.add_argument("method", choices=["personal_sign", "eth_sendTransaction", "eth_signTypedData_v4"])
-    sign.add_argument("params", nargs="?", help="JSON-encoded params array (default: read from stdin)")
-    sign.add_argument("--timeout", type=int, default=120, help="timeout in seconds (default: 120)")
     args = parser.parse_args()
 
     if args.command == "status":
@@ -154,28 +150,6 @@ def main() -> int:
             write_json(request("job.status", jobId=args.job_id, logOffset=args.cursor, maxBytes=MAX_CHUNK_BYTES))
         elif args.jobs_command == "cancel":
             write_json(request("job.cancel", jobId=args.job_id))
-    elif args.command == "sign":
-        import time as _time
-        if args.params is not None:
-            params_raw = args.params
-        else:
-            params_raw = sys.stdin.read().strip()
-        try:
-            params = json.loads(params_raw)
-        except json.JSONDecodeError as error:
-            raise SystemExit(f"invalid JSON params: {error}") from None
-        if not isinstance(params, list):
-            raise SystemExit("params must be a JSON array")
-        result = request("signing.request", method=args.method, params=params)
-        request_id = result["requestId"]
-        deadline = _time.monotonic() + args.timeout
-        while _time.monotonic() < deadline:
-            status = request("signing.status", requestId=request_id)
-            if status["status"] != "pending":
-                write_json(status)
-                return 0 if status["status"] == "resolved" else 1
-            _time.sleep(2)
-        raise SystemExit("signing request timed out")
     return 0
 
 

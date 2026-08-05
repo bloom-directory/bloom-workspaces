@@ -59,19 +59,20 @@ export const GuestRequest = z.discriminatedUnion("operation", [
     caPublicKey: z.string().min(32).max(1024).regex(/^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/),
     nfs: z.boolean(),
   }),
+  Envelope.extend({ operation: z.literal("outbox.pending") }),
   Envelope.extend({
-    operation: z.literal("signing.request"),
-    method: z.enum(["eth_sendTransaction", "personal_sign", "eth_signTypedData_v4"]),
-    params: z.array(z.unknown()).min(1).max(8),
+    operation: z.literal("outbox.confirm"),
+    txId: z.string().min(1).max(64),
+    chain: z.string().min(1).max(32),
+    wallet: z.string().min(1).max(64),
+    confirmText: z.string().min(1),
   }),
-  Envelope.extend({ operation: z.literal("signing.status"), requestId: z.string().min(1).max(64) }),
-  Envelope.extend({ operation: z.literal("signing.pending") }),
   Envelope.extend({
-    operation: z.literal("signing.resolve"),
-    requestId: z.string().min(1).max(64),
-    result: z.unknown().optional(),
-    error: z.string().min(1).max(1024).optional(),
-  }).refine((v) => v.result !== undefined || v.error !== undefined, "either result or error is required"),
+    operation: z.literal("outbox.cancel"),
+    txId: z.string().min(1).max(64),
+    chain: z.string().min(1).max(32),
+    wallet: z.string().min(1).max(64),
+  }),
 ]);
 
 export type GuestRequest = z.infer<typeof GuestRequest>;

@@ -3,9 +3,8 @@
 `bloom-guest-control.py` is the guest-owned implementation of protocol v1. It
 supports bounded file chunks, structured jobs, absolute-cursor log reads,
 process-group cancellation, watch-only Bloom status, one-time SSH/NFS
-configuration, and wallet signing relay (relays `personal_sign`,
-`eth_sendTransaction`, and `eth_signTypedData_v4` requests to the user's
-browser wallet via the agent↔control↔browser polling chain). It has no TCP listener: the production transports are QEMU virtio-serial stdio, AF_VSOCK port
+configuration, and outbox relay (reads pending outbox entries from bloom serve
+via IPC and relays plan.md to the user's browser for approval). It has no TCP listener: the production transports are QEMU virtio-serial stdio, AF_VSOCK port
 5001, and a mode-0600 guest-local Unix socket for `bloom-workspace`. Stdio and
 socket transports may run concurrently and share one bounded job table.
 
@@ -41,7 +40,7 @@ The controller copies only the operator's controlled proxy and CA path settings;
 it does not inherit wallet, control-plane, or host credentials.
 
 `bloom.status` reports only the public watch address, whether `/bloom` is
-mounted, and explicit false values for wallet signing and transactions. It
+mounted, and capability flags. It
 never reads or returns passphrases, private keys, cookies, or session material.
 
 `connections.configure` is accepted once per guest scope and only by the

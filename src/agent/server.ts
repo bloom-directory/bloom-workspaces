@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Duplex } from "node:stream";
@@ -202,26 +201,26 @@ export async function startAgent(config: Config, runtime: WorkspaceRuntime) {
       });
     } catch (error) { next(error); }
   });
-  app.get("/v1/workspaces/:id/signing/pending", async (request, response, next) => {
+  app.get("/v1/workspaces/:id/outbox/pending", async (request, response, next) => {
     try {
       const call = requireGuest(runtime, request.params.id ?? "");
-      const result = await call({ version: 1, id: `signing_pending_${(request.params.id ?? "").replaceAll("-", "")}`, operation: "signing.pending" }, 10_000);
+      const result = await call({ version: 1, id: `outbox_pending_${(request.params.id ?? "").replaceAll("-", "")}`, operation: "outbox.pending" }, 10_000);
       response.json(result);
     } catch (error) { next(error); }
   });
-  app.post("/v1/workspaces/:id/signing/request", async (request, response, next) => {
+  app.post("/v1/workspaces/:id/outbox/confirm", async (request, response, next) => {
     try {
       const call = requireGuest(runtime, request.params.id ?? "");
-      const body = z.object({ method: z.enum(["eth_sendTransaction", "personal_sign", "eth_signTypedData_v4"]), params: z.array(z.unknown()).min(1).max(8) }).strict().parse(request.body);
-      const result = await call({ version: 1, id: `signing_req_${randomUUID().replaceAll("-", "").slice(0, 16)}`, operation: "signing.request", method: body.method, params: body.params }, 10_000);
-      response.status(201).json(result);
+      const body = z.object({ id: z.string().min(1).max(64), chain: z.string().min(1).max(32), wallet: z.string().min(1).max(64), confirmText: z.string().min(1) }).strict().parse(request.body);
+      const result = await call({ version: 1, id: `outbox_confirm_${(request.params.id ?? "").replaceAll("-", "")}`, operation: "outbox.confirm", txId: body.id, chain: body.chain, wallet: body.wallet, confirmText: body.confirmText }, 10_000);
+      response.json(result);
     } catch (error) { next(error); }
   });
-  app.post("/v1/workspaces/:id/signing/resolve", async (request, response, next) => {
+  app.post("/v1/workspaces/:id/outbox/cancel", async (request, response, next) => {
     try {
       const call = requireGuest(runtime, request.params.id ?? "");
-      const body = z.object({ requestId: z.string().min(1).max(64), result: z.unknown().optional(), error: z.string().min(1).max(1024).optional() }).refine((v) => v.result !== undefined || v.error !== undefined, "either result or error is required").parse(request.body);
-      const result = await call({ version: 1, id: `signing_res_${randomUUID().replaceAll("-", "").slice(0, 16)}`, operation: "signing.resolve", requestId: body.requestId, ...(body.result !== undefined ? { result: body.result } : {}), ...(body.error !== undefined ? { error: body.error } : {}) }, 10_000);
+      const body = z.object({ id: z.string().min(1).max(64), chain: z.string().min(1).max(32), wallet: z.string().min(1).max(64) }).strict().parse(request.body);
+      const result = await call({ version: 1, id: `outbox_cancel_${(request.params.id ?? "").replaceAll("-", "")}`, operation: "outbox.cancel", txId: body.id, chain: body.chain, wallet: body.wallet }, 10_000);
       response.json(result);
     } catch (error) { next(error); }
   });

@@ -47,12 +47,10 @@ MAX_JOB_PROCESSES = 64
 MAX_JOB_FILE_BYTES = 64 * 1024 * 1024
 MAX_JOB_TIMEOUT_MS = 2 * 60 * 60 * 1000
 JOB_KILL_GRACE_SECONDS = 1.0
-MAX_SIGNING_METHODS = frozenset({"eth_sendTransaction", "personal_sign", "eth_signTypedData_v4"})
-MAX_SIGNING_PARAMS_BYTES = 32 * 1024
-MAX_SIGNING_RESULT_BYTES = 32 * 1024
-MAX_PENDING_SIGNING = 8
-SIGNING_TIMEOUT_SECONDS = 120.0
-SIGNING_RETENTION_SECONDS = 30.0
+BLOOM_SOCKET_PATH = os.environ.get("BLOOM_IPC_SOCKET", "/workspace/.bloom/run/bloom.sock")
+MAX_OUTBOX_PLAN_BYTES = 64 * 1024
+MAX_OUTBOX_CHAINS = 16
+MAX_OUTBOX_PENDING = 32
 
 REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
@@ -117,17 +115,12 @@ def validate_request(raw: Any) -> dict[str, Any]:
         "job.cancel": base | {"jobId"},
         "bloom.status": base,
         "connections.configure": base | {"workspaceId", "wallet", "caPublicKey", "nfs"},
-        "signing.request": base | {"method", "params"},
-        "signing.status": base | {"requestId"},
-        "signing.pending": base,
+        "outbox.pending": base,
+        "outbox.confirm": base | {"txId", "chain", "wallet", "confirmText"},
+        "outbox.cancel": base | {"txId", "chain", "wallet"},
     }
-    # signing.resolve has optional result/error — validated in handler
-    if operation == "signing.resolve":
-        required_keys = base | {"requestId"}
-        require(set(raw) == required_keys or set(raw) == required_keys | {"result"} or set(raw) == required_keys | {"error"}, "invalid_request", "request fields do not match the operation contract")
-    else:
-        require(operation in fields, "invalid_request", "unknown guest operation")
-        require_exact_keys(raw, fields[operation])
+    require(operation in fields, "invalid_request", "unknown guest operation")
+    require_exact_keys(raw, fields[operation])
     return raw
 
 
@@ -733,8 +726,6 @@ class GuestControl:
         self.mountd: subprocess.Popen[bytes] | None = None
         self.connection_scope: tuple[str, str, bool] | None = None
         self.connection_lock = threading.Lock()
-        self.signing_lock = threading.Lock()
-        self.pending_signing: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
     def handle(self, raw: Any) -> dict[str, Any]:
         request_id = raw.get("id") if isinstance(raw, dict) and isinstance(raw.get("id"), str) and REQUEST_ID.fullmatch(raw["id"]) else "invalid"
@@ -744,7 +735,7 @@ class GuestControl:
             if operation == "hello":
                 result = {
                     "protocolVersion": PROTOCOL_VERSION,
-                    "operations": ["fs.list", "fs.read", "fs.write", "fs.delete", "job.start", "job.status", "job.cancel", "bloom.status", "connections.configure", "signing.request", "signing.status", "signing.pending", "signing.resolve"],
+                    "operations": ["fs.list", "fs.read", "fs.write", "fs.delete", "job.start", "job.status", "job.cancel", "bloom.status", "connections.configure", "outbox.pending", "outbox.confirm", "outbox.cancel"],
                     "limits": {
                         "fileChunkBytes": MAX_FILE_CHUNK_BYTES,
                         "fileBytes": MAX_FILE_BYTES,
@@ -773,14 +764,12 @@ class GuestControl:
                 result = self._bloom_status()
             elif operation == "connections.configure":
                 result = self._configure_connections(request)
-            elif operation == "signing.request":
-                result = self._signing_request(request)
-            elif operation == "signing.status":
-                result = self._signing_status(request)
-            elif operation == "signing.pending":
-                result = self._signing_pending()
-            elif operation == "signing.resolve":
-                result = self._signing_resolve(request)
+            elif operation == "outbox.pending":
+                result = self._outbox_pending()
+            elif operation == "outbox.confirm":
+                result = self._outbox_confirm(request)
+            elif operation == "outbox.cancel":
+                result = self._outbox_cancel(request)
             else:
                 raise ControlError("invalid_request", "unknown guest operation")
             return {"version": PROTOCOL_VERSION, "id": request_id, "ok": True, "result": result}
@@ -814,73 +803,72 @@ class GuestControl:
             "helper": {"name": "bloom-workspace", "protocolVersion": PROTOCOL_VERSION},
         }
 
-    def _cleanup_signing_locked(self) -> None:
-        now = time.monotonic()
-        expired: list[str] = []
-        for rid, entry in self.pending_signing.items():
-            age = now - entry["created_at"]
-            if age > SIGNING_TIMEOUT_SECONDS + SIGNING_RETENTION_SECONDS:
-                expired.append(rid)
-            elif age > SIGNING_TIMEOUT_SECONDS and entry["resolved"] is None:
-                entry["resolved"] = {"status": "rejected", "error": "signing request timed out"}
-                entry["resolved_at"] = now
-        for rid in expired:
-            del self.pending_signing[rid]
+    def _bloom_ipc(self, method: str, params: dict[str, Any]) -> Any:
+        """Call bloom serve's IPC socket."""
+        require(os.path.exists(BLOOM_SOCKET_PATH), "unavailable", "Bloom IPC socket is not available")
+        request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        frame = json.dumps(request, separators=(",", ":")).encode() + b"\n"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(10.0)
+            client.connect(BLOOM_SOCKET_PATH)
+            client.sendall(frame)
+            response = bytearray()
+            while b"\n" not in response:
+                chunk = client.recv(65536)
+                if not chunk:
+                    break
+                response.extend(chunk)
+                if len(response) > 1024 * 1024:
+                    break
+        decoded = json.loads(bytes(response).decode())
+        if "error" in decoded:
+            raise ControlError("internal", f"bloom IPC error: {decoded['error']}")
+        return decoded.get("result")
 
-    def _signing_request(self, request: dict[str, Any]) -> dict[str, Any]:
-        method = request["method"]
-        params = request["params"]
-        require(isinstance(method, str) and method in MAX_SIGNING_METHODS, "invalid_request", "unsupported signing method")
-        require(isinstance(params, list) and len(params) <= 8, "invalid_request", "invalid signing params")
-        params_json = json.dumps(params, separators=(",", ":"))
-        require(len(params_json.encode("utf-8")) <= MAX_SIGNING_PARAMS_BYTES, "limit_exceeded", "signing params are too large")
-        request_id = f"sig_{uuid.uuid4().hex[:16]}"
-        with self.signing_lock:
-            self._cleanup_signing_locked()
-            require(len(self.pending_signing) < MAX_PENDING_SIGNING, "limit_exceeded", "too many pending signing requests")
-            self.pending_signing[request_id] = {"method": method, "params": params, "created_at": time.monotonic(), "resolved": None}
-        return {"requestId": request_id}
+    def _outbox_pending(self) -> dict[str, Any]:
+        """List pending outbox transactions by scanning the bloom VFS via IPC."""
+        wallet_result = self._bloom_ipc("list", {"path": "/wallets"})
+        wallets = [e.get("name") for e in (wallet_result.get("entries") or []) if e.get("type") == "dir"]
+        pending = []
+        for wallet in wallets[:MAX_OUTBOX_CHAINS]:
+            chain_result = self._bloom_ipc("list", {"path": f"/wallets/{wallet}/chains"})
+            chains = [e.get("name") for e in (chain_result.get("entries") or []) if e.get("type") == "dir"]
+            for chain in chains[:MAX_OUTBOX_CHAINS]:
+                pending_result = self._bloom_ipc("list", {"path": f"/wallets/{wallet}/chains/{chain}/outbox/pending"})
+                ids = [e.get("name") for e in (pending_result.get("entries") or []) if e.get("type") == "dir"]
+                for tx_id in ids[:MAX_OUTBOX_PENDING]:
+                    plan_result = self._bloom_ipc("read", {"path": f"/wallets/{wallet}/chains/{chain}/outbox/pending/{tx_id}/plan.md"})
+                    plan_b64 = plan_result.get("bytes_b64", "")
+                    plan_md = base64.b64decode(plan_b64).decode("utf-8", errors="replace")[:MAX_OUTBOX_PLAN_BYTES]
+                    pending.append({"id": tx_id, "chain": chain, "wallet": wallet, "planMd": plan_md})
+        return {"requests": pending}
 
-    def _signing_status(self, request: dict[str, Any]) -> dict[str, Any]:
-        request_id = request["requestId"]
-        require(isinstance(request_id, str) and len(request_id) <= 64, "invalid_request", "invalid request id")
-        with self.signing_lock:
-            self._cleanup_signing_locked()
-            entry = self.pending_signing.get(request_id)
-            if entry is None:
-                raise ControlError("not_found", "signing request not found")
-            if entry["resolved"] is None:
-                return {"status": "pending"}
-            return entry["resolved"]
+    def _outbox_confirm(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Write confirm to bloom's outbox via IPC."""
+        tx_id = request["txId"]
+        chain = request["chain"]
+        wallet = request["wallet"]
+        confirm_text = request["confirmText"]
+        require(isinstance(tx_id, str) and len(tx_id) <= 64, "invalid_request", "invalid tx id")
+        require(isinstance(chain, str) and len(chain) <= 32, "invalid_request", "invalid chain")
+        require(isinstance(wallet, str) and len(wallet) <= 64, "invalid_request", "invalid wallet name")
+        require(isinstance(confirm_text, str) and len(confirm_text.strip()) > 0, "invalid_request", "confirm text is required")
+        path = f"/wallets/{wallet}/chains/{chain}/outbox/pending/{tx_id}/confirm"
+        body_b64 = base64.b64encode(confirm_text.encode()).decode()
+        self._bloom_ipc("write", {"path": path, "bytes_b64": body_b64})
+        return {}
 
-    def _signing_pending(self) -> dict[str, Any]:
-        with self.signing_lock:
-            self._cleanup_signing_locked()
-            requests = [
-                {"requestId": rid, "method": entry["method"], "params": entry["params"]}
-                for rid, entry in self.pending_signing.items()
-                if entry["resolved"] is None
-            ]
-            return {"requests": requests}
-
-    def _signing_resolve(self, request: dict[str, Any]) -> dict[str, Any]:
-        request_id = request["requestId"]
-        result = request.get("result")
-        error = request.get("error")
-        require(isinstance(request_id, str) and len(request_id) <= 64, "invalid_request", "invalid request id")
-        require(result is not None or error is not None, "invalid_request", "either result or error is required")
-        if result is not None:
-            result_json = json.dumps(result, separators=(",", ":"))
-            require(len(result_json.encode("utf-8")) <= MAX_SIGNING_RESULT_BYTES, "limit_exceeded", "signing result is too large")
-        with self.signing_lock:
-            entry = self.pending_signing.get(request_id)
-            if entry is None or entry["resolved"] is not None:
-                raise ControlError("not_found", "signing request not found or already resolved")
-            if error is not None:
-                entry["resolved"] = {"status": "rejected", "error": str(error)[:1024]}
-            else:
-                entry["resolved"] = {"status": "resolved", "result": result}
-            entry["resolved_at"] = time.monotonic()
+    def _outbox_cancel(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Write cancel to bloom's outbox via IPC."""
+        tx_id = request["txId"]
+        chain = request["chain"]
+        wallet = request["wallet"]
+        require(isinstance(tx_id, str) and len(tx_id) <= 64, "invalid_request", "invalid tx id")
+        require(isinstance(chain, str) and len(chain) <= 32, "invalid_request", "invalid chain")
+        require(isinstance(wallet, str) and len(wallet) <= 64, "invalid_request", "invalid wallet name")
+        path = f"/wallets/{wallet}/chains/{chain}/outbox/pending/{tx_id}/cancel"
+        body_b64 = base64.b64encode(b"cancel").decode()
+        self._bloom_ipc("write", {"path": path, "bytes_b64": body_b64})
         return {}
 
     def _configure_connections(self, request: dict[str, Any]) -> dict[str, Any]:

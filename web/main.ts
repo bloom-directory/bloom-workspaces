@@ -105,7 +105,7 @@ let fit: FitAddon | undefined;
 let workspacePollTimer: number | undefined;
 let leaseTimer: number | undefined;
 let jobPollTimer: number | undefined;
-let signingPollTimer: number | undefined;
+let outboxPollTimer: number | undefined;
 let jobEvents: EventSource | undefined;
 let activeJob: JobStatus | undefined;
 let activeConnection: ConnectionGrant | undefined;
@@ -470,7 +470,7 @@ function renderWorkspace(workspace?: Workspace) {
     consoleElement.classList.remove("hidden");
     if (loadedWorkspaceId !== workspace.id) resetWorkspaceTools(workspace.id);
     if (isAvailable("terminal") && !socket) openTerminal(workspace);
-    if (!signingPollTimer) startSigningPoll(workspace.id);
+    if (!outboxPollTimer) startOutboxPoll(workspace.id);
   }
   updateLease(workspace);
   workspacePollTimer = window.setTimeout(refreshWorkspace, workspace.state === "running" ? 10_000 : 1_500);
@@ -515,7 +515,7 @@ function resetWorkspaceTools(id: string) {
 function closeWorkspaceResources() {
   closeTerminal();
   closeJobStream();
-  closeSigningPoll();
+  closeOutboxPoll();
   clearConnectionGrant();
   loadedWorkspaceId = undefined;
   activeJob = undefined;
@@ -523,83 +523,51 @@ function closeWorkspaceResources() {
   window.clearTimeout(leaseTimer);
 }
 
-function closeSigningPoll() {
-  window.clearInterval(signingPollTimer);
-  signingPollTimer = undefined;
+function closeOutboxPoll() {
+  window.clearInterval(outboxPollTimer);
+  outboxPollTimer = undefined;
 }
 
-function formatSigningRequest(method: string, params: unknown[]): string {
-  if (method === "personal_sign") {
-    const message = String(params[0] ?? "");
-    const address = String(params[1] ?? "");
-    return `Method: personal_sign\nFrom: ${address}\nMessage:\n${message}`;
-  }
-  if (method === "eth_sendTransaction") {
-    const tx = (params[0] ?? {}) as Record<string, unknown>;
-    const from = String(tx.from ?? "?");
-    const to = String(tx.to ?? "?");
-    const value = String(tx.value ?? "0x0");
-    const data = String(tx.data ?? "0x");
-    const lines = [`Method: eth_sendTransaction`, `From: ${from}`, `To: ${to}`, `Value: ${value} wei`];
-    if (data !== "0x" && data.length > 10) lines.push(`Data: ${data.slice(0, 100)}${data.length > 100 ? "…" : ""}`);
-    return lines.join("\n");
-  }
-  if (method === "eth_signTypedData_v4") {
-    const address = String(params[0] ?? "");
-    const typed = params[1];
-    return `Method: eth_signTypedData_v4\nFrom: ${address}\nTyped data:\n${typeof typed === "string" ? typed.slice(0, 500) : JSON.stringify(typed, null, 2).slice(0, 500)}`;
-  }
-  return `Method: ${method}\nParams: ${JSON.stringify(params).slice(0, 500)}`;
-}
-
-function startSigningPoll(workspaceId: string) {
-  closeSigningPoll();
+function startOutboxPoll(workspaceId: string) {
+  closeOutboxPoll();
   const seen = new Set<string>();
-  signingPollTimer = window.setInterval(async () => {
+  outboxPollTimer = window.setInterval(async () => {
     if (!walletBinding || !session.authenticated) return;
     try {
-      const result = await api<{ requests: { requestId: string; method: string; params: unknown[] }[] }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/signing/pending`);
+      const result = await api<{ requests: { id: string; chain: string; wallet: string; planMd: string }[] }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/outbox/pending`);
       for (const request of result.requests) {
-        if (seen.has(request.requestId)) continue;
-        seen.add(request.requestId);
-        void promptAndResolveSigningRequest(workspaceId, request);
+        if (seen.has(request.id)) continue;
+        seen.add(request.id);
+        void promptAndResolveOutboxRequest(workspaceId, request);
       }
-      if (seen.size > 50) { const keep = new Set(result.requests.map((r) => r.requestId)); for (const id of seen) if (!keep.has(id)) seen.delete(id); }
+      if (seen.size > 50) { const keep = new Set(result.requests.map((r) => r.id)); for (const id of seen) if (!keep.has(id)) seen.delete(id); }
     } catch { /* workspace may have stopped */ }
   }, 3_000);
 }
 
-async function promptAndResolveSigningRequest(workspaceId: string, request: { requestId: string; method: string; params: unknown[] }) {
+async function promptAndResolveOutboxRequest(workspaceId: string, request: { id: string; chain: string; wallet: string; planMd: string }) {
   if (!walletBinding) return;
-  const dialog = $("signing-dialog") as HTMLDialogElement;
-  const description = $("signing-description");
-  const detail = $("signing-detail");
-  description.textContent = `Your workspace is requesting a wallet signature. Review the details below, then approve or reject.`;
-  detail.textContent = formatSigningRequest(request.method, request.params);
+  const dialog = $("outbox-dialog") as HTMLDialogElement;
+  const description = $("outbox-description");
+  const detail = $("outbox-detail");
+  description.textContent = `Your workspace has a pending transaction for review. Review the plan below, then approve or reject.`;
+  detail.textContent = request.planMd;
   dialog.showModal();
   const choice = await new Promise<string>((resolve) => {
     const onClose = () => { dialog.removeEventListener("close", onClose); resolve(dialog.returnValue || "reject"); };
     dialog.addEventListener("close", onClose);
   });
   if (choice !== "approve") {
-    await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/signing/resolve`, {
+    await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/outbox/cancel`, {
       method: "POST",
-      body: JSON.stringify({ requestId: request.requestId, error: "User rejected the signing request" }),
+      body: JSON.stringify({ id: request.id, chain: request.chain, wallet: request.wallet }),
     }).catch(() => undefined);
     return;
   }
-  try {
-    const result = await (walletBinding.provider as { request(args: { method: string; params: unknown[] }): Promise<unknown> }).request({ method: request.method, params: request.params });
-    await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/signing/resolve`, {
-      method: "POST",
-      body: JSON.stringify({ requestId: request.requestId, result }),
-    });
-  } catch (error) {
-    await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/signing/resolve`, {
-      method: "POST",
-      body: JSON.stringify({ requestId: request.requestId, error: error instanceof Error ? error.message : "Wallet request failed" }),
-    }).catch(() => undefined);
-  }
+  await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/outbox/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ id: request.id, chain: request.chain, wallet: request.wallet, confirmText: "y" }),
+  }).catch(() => undefined);
 }
 
 function openTerminal(workspace: Workspace) {
