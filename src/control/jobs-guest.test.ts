@@ -56,7 +56,7 @@ describe("guest job, file, and Bloom control service", () => {
       result: {
         identity: { kind: "watch", address: "0x1111111111111111111111111111111111111111" },
         mount: { path: "/bloom" },
-        capabilities: { files: true, jobs: true, walletSigning: false, transactions: false },
+        capabilities: { files: true, jobs: true, walletSigning: true, transactions: true },
       },
     });
 

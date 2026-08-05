@@ -105,6 +105,7 @@ let fit: FitAddon | undefined;
 let workspacePollTimer: number | undefined;
 let leaseTimer: number | undefined;
 let jobPollTimer: number | undefined;
+let signingPollTimer: number | undefined;
 let jobEvents: EventSource | undefined;
 let activeJob: JobStatus | undefined;
 let activeConnection: ConnectionGrant | undefined;
@@ -238,7 +239,7 @@ async function authenticate(provider: WalletProvider, address: string, value: Au
     expirationTime: new Date(value.expirationTime),
     version: "1",
   });
-  setMessage("Approve the login message in your wallet. This does not authorize a transaction.");
+  setMessage("Approve the login message in your wallet.");
   const signature = await wallet.signMessage({ account: normalizedAddress, message });
   const verified = await api<{ wallet: string; csrfToken: string }>("/api/auth/verify", { method: "POST", body: JSON.stringify({ message, signature }) });
   session = { ...session, authenticated: true, wallet: verified.wallet, csrfToken: verified.csrfToken };
@@ -271,13 +272,13 @@ async function connectMobileWallet() {
   const provider = await EthereumProvider.init({
     projectId: walletConnectProjectId,
     optionalChains: [value.chainId],
-    methods: ["personal_sign"],
+    methods: ["personal_sign", "eth_sendTransaction", "eth_signTypedData_v4"],
     events: ["accountsChanged", "chainChanged"],
     showQrModal: true,
     telemetryEnabled: false,
     metadata: {
       name: "Bloom Workspaces",
-      description: "Sign in to an isolated Linux workspace. Login signatures only; no transactions.",
+      description: "Sign in to an isolated Linux workspace. Sign messages and transactions are relayed for your approval.",
       url: location.origin,
       icons: [`${location.origin}/bloom-workspaces.svg`],
       redirect: { universal: `${location.origin}/` },
@@ -469,6 +470,7 @@ function renderWorkspace(workspace?: Workspace) {
     consoleElement.classList.remove("hidden");
     if (loadedWorkspaceId !== workspace.id) resetWorkspaceTools(workspace.id);
     if (isAvailable("terminal") && !socket) openTerminal(workspace);
+    if (!signingPollTimer) startSigningPoll(workspace.id);
   }
   updateLease(workspace);
   workspacePollTimer = window.setTimeout(refreshWorkspace, workspace.state === "running" ? 10_000 : 1_500);
@@ -513,11 +515,49 @@ function resetWorkspaceTools(id: string) {
 function closeWorkspaceResources() {
   closeTerminal();
   closeJobStream();
+  closeSigningPoll();
   clearConnectionGrant();
   loadedWorkspaceId = undefined;
   activeJob = undefined;
   window.clearTimeout(workspacePollTimer);
   window.clearTimeout(leaseTimer);
+}
+
+function closeSigningPoll() {
+  window.clearInterval(signingPollTimer);
+  signingPollTimer = undefined;
+}
+
+function startSigningPoll(workspaceId: string) {
+  closeSigningPoll();
+  const seen = new Set<string>();
+  signingPollTimer = window.setInterval(async () => {
+    if (!walletBinding || !session.authenticated) return;
+    try {
+      const result = await api<{ requests: { requestId: string; method: string; params: unknown[] }[] }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/signing/pending`);
+      for (const request of result.requests) {
+        if (seen.has(request.requestId)) continue;
+        seen.add(request.requestId);
+        void resolveSigningRequest(workspaceId, request);
+      }
+    } catch { /* workspace may have stopped */ }
+  }, 3_000);
+}
+
+async function resolveSigningRequest(workspaceId: string, request: { requestId: string; method: string; params: unknown[] }) {
+  if (!walletBinding) return;
+  try {
+    const result = await (walletBinding.provider as { request(args: { method: string; params: unknown[] }): Promise<unknown> }).request({ method: request.method, params: request.params });
+    await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/signing/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ requestId: request.requestId, result }),
+    });
+  } catch (error) {
+    await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/signing/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ requestId: request.requestId, error: error instanceof Error ? error.message : "Wallet request failed" }),
+    }).catch(() => undefined);
+  }
 }
 
 function openTerminal(workspace: Workspace) {

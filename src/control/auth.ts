@@ -22,7 +22,7 @@ export function issueChallenge(db: BloomDatabase, config: Config, ipHash: string
     domain: url.host,
     uri: url.origin,
     chainId: config.authChainId,
-    statement: "Sign in to request a disposable Bloom workspace. This does not authorize transactions.",
+    statement: "Sign in to request a Bloom workspace. Workspace processes may request wallet signatures; you will approve each request in your wallet.",
     issuedAt: issuedAt.toISOString(),
     expirationTime: expirationTime.toISOString(),
   };

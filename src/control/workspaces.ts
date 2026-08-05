@@ -151,6 +151,21 @@ export class WorkspaceService {
     catch (error) { throw this.agentWorkspaceError(error); }
   }
 
+  async signingPending(wallet: string, id: string) {
+    const row = this.ownedRunning(wallet, id, "signing_pending");
+    try { return await this.agent.signingPending(row.id); }
+    catch (error) { throw this.agentWorkspaceError(error); }
+  }
+
+  async signingResolve(wallet: string, id: string, requestId: string, resolution: { result?: unknown; error?: string }) {
+    const row = this.ownedRunning(wallet, id, "signing_resolve");
+    try {
+      const result = await this.agent.signingResolve(row.id, requestId, resolution);
+      audit(this.db, "workspace.signing_resolved", row.wallet, row.id, { requestId, approved: resolution.error === undefined });
+      return result;
+    } catch (error) { throw this.agentWorkspaceError(error); }
+  }
+
   async connections(wallet: string, id: string) {
     const row = this.ownedRunning(wallet, id, "connections");
     try { return await this.agent.connections(row.id); }

@@ -47,6 +47,12 @@ MAX_JOB_PROCESSES = 64
 MAX_JOB_FILE_BYTES = 64 * 1024 * 1024
 MAX_JOB_TIMEOUT_MS = 2 * 60 * 60 * 1000
 JOB_KILL_GRACE_SECONDS = 1.0
+MAX_SIGNING_METHODS = frozenset({"eth_sendTransaction", "personal_sign", "eth_signTypedData_v4"})
+MAX_SIGNING_PARAMS_BYTES = 32 * 1024
+MAX_SIGNING_RESULT_BYTES = 32 * 1024
+MAX_PENDING_SIGNING = 8
+SIGNING_TIMEOUT_SECONDS = 120.0
+SIGNING_RETENTION_SECONDS = 30.0
 
 REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
@@ -111,9 +117,17 @@ def validate_request(raw: Any) -> dict[str, Any]:
         "job.cancel": base | {"jobId"},
         "bloom.status": base,
         "connections.configure": base | {"workspaceId", "wallet", "caPublicKey", "nfs"},
+        "signing.request": base | {"method", "params"},
+        "signing.status": base | {"requestId"},
+        "signing.pending": base,
     }
-    require(operation in fields, "invalid_request", "unknown guest operation")
-    require_exact_keys(raw, fields[operation])
+    # signing.resolve has optional result/error — validated in handler
+    if operation == "signing.resolve":
+        required_keys = base | {"requestId"}
+        require(set(raw) == required_keys or set(raw) == required_keys | {"result"} or set(raw) == required_keys | {"error"}, "invalid_request", "request fields do not match the operation contract")
+    else:
+        require(operation in fields, "invalid_request", "unknown guest operation")
+        require_exact_keys(raw, fields[operation])
     return raw
 
 
@@ -719,6 +733,8 @@ class GuestControl:
         self.mountd: subprocess.Popen[bytes] | None = None
         self.connection_scope: tuple[str, str, bool] | None = None
         self.connection_lock = threading.Lock()
+        self.signing_lock = threading.Lock()
+        self.pending_signing: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
     def handle(self, raw: Any) -> dict[str, Any]:
         request_id = raw.get("id") if isinstance(raw, dict) and isinstance(raw.get("id"), str) and REQUEST_ID.fullmatch(raw["id"]) else "invalid"
@@ -728,7 +744,7 @@ class GuestControl:
             if operation == "hello":
                 result = {
                     "protocolVersion": PROTOCOL_VERSION,
-                    "operations": ["fs.list", "fs.read", "fs.write", "fs.delete", "job.start", "job.status", "job.cancel", "bloom.status", "connections.configure"],
+                    "operations": ["fs.list", "fs.read", "fs.write", "fs.delete", "job.start", "job.status", "job.cancel", "bloom.status", "connections.configure", "signing.request", "signing.status", "signing.pending", "signing.resolve"],
                     "limits": {
                         "fileChunkBytes": MAX_FILE_CHUNK_BYTES,
                         "fileBytes": MAX_FILE_BYTES,
@@ -757,6 +773,14 @@ class GuestControl:
                 result = self._bloom_status()
             elif operation == "connections.configure":
                 result = self._configure_connections(request)
+            elif operation == "signing.request":
+                result = self._signing_request(request)
+            elif operation == "signing.status":
+                result = self._signing_status(request)
+            elif operation == "signing.pending":
+                result = self._signing_pending()
+            elif operation == "signing.resolve":
+                result = self._signing_resolve(request)
             else:
                 raise ControlError("invalid_request", "unknown guest operation")
             return {"version": PROTOCOL_VERSION, "id": request_id, "ok": True, "result": result}
@@ -784,11 +808,80 @@ class GuestControl:
                 "files": True,
                 "jobs": True,
                 "bloomRead": executable and watch_identity,
-                "walletSigning": False,
-                "transactions": False,
+                "walletSigning": True,
+                "transactions": True,
             },
             "helper": {"name": "bloom-workspace", "protocolVersion": PROTOCOL_VERSION},
         }
+
+    def _cleanup_signing_locked(self) -> None:
+        now = time.monotonic()
+        expired: list[str] = []
+        for rid, entry in self.pending_signing.items():
+            age = now - entry["created_at"]
+            if age > SIGNING_TIMEOUT_SECONDS + SIGNING_RETENTION_SECONDS:
+                expired.append(rid)
+            elif age > SIGNING_TIMEOUT_SECONDS and entry["resolved"] is None:
+                entry["resolved"] = {"status": "rejected", "error": "signing request timed out"}
+                entry["resolved_at"] = now
+        for rid in expired:
+            del self.pending_signing[rid]
+
+    def _signing_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        method = request["method"]
+        params = request["params"]
+        require(isinstance(method, str) and method in MAX_SIGNING_METHODS, "invalid_request", "unsupported signing method")
+        require(isinstance(params, list) and len(params) <= 8, "invalid_request", "invalid signing params")
+        params_json = json.dumps(params, separators=(",", ":"))
+        require(len(params_json.encode("utf-8")) <= MAX_SIGNING_PARAMS_BYTES, "limit_exceeded", "signing params are too large")
+        request_id = f"sig_{uuid.uuid4().hex[:16]}"
+        with self.signing_lock:
+            self._cleanup_signing_locked()
+            require(len(self.pending_signing) < MAX_PENDING_SIGNING, "limit_exceeded", "too many pending signing requests")
+            self.pending_signing[request_id] = {"method": method, "params": params, "created_at": time.monotonic(), "resolved": None}
+        return {"requestId": request_id}
+
+    def _signing_status(self, request: dict[str, Any]) -> dict[str, Any]:
+        request_id = request["requestId"]
+        require(isinstance(request_id, str) and len(request_id) <= 64, "invalid_request", "invalid request id")
+        with self.signing_lock:
+            self._cleanup_signing_locked()
+            entry = self.pending_signing.get(request_id)
+            if entry is None:
+                raise ControlError("not_found", "signing request not found")
+            if entry["resolved"] is None:
+                return {"status": "pending"}
+            return entry["resolved"]
+
+    def _signing_pending(self) -> dict[str, Any]:
+        with self.signing_lock:
+            self._cleanup_signing_locked()
+            requests = [
+                {"requestId": rid, "method": entry["method"], "params": entry["params"]}
+                for rid, entry in self.pending_signing.items()
+                if entry["resolved"] is None
+            ]
+            return {"requests": requests}
+
+    def _signing_resolve(self, request: dict[str, Any]) -> dict[str, Any]:
+        request_id = request["requestId"]
+        result = request.get("result")
+        error = request.get("error")
+        require(isinstance(request_id, str) and len(request_id) <= 64, "invalid_request", "invalid request id")
+        require(result is not None or error is not None, "invalid_request", "either result or error is required")
+        if result is not None:
+            result_json = json.dumps(result, separators=(",", ":"))
+            require(len(result_json.encode("utf-8")) <= MAX_SIGNING_RESULT_BYTES, "limit_exceeded", "signing result is too large")
+        with self.signing_lock:
+            entry = self.pending_signing.get(request_id)
+            if entry is None or entry["resolved"] is not None:
+                raise ControlError("not_found", "signing request not found or already resolved")
+            if error is not None:
+                entry["resolved"] = {"status": "rejected", "error": str(error)[:1024]}
+            else:
+                entry["resolved"] = {"status": "resolved", "result": result}
+            entry["resolved_at"] = time.monotonic()
+        return {}
 
     def _configure_connections(self, request: dict[str, Any]) -> dict[str, Any]:
         with self.connection_lock:

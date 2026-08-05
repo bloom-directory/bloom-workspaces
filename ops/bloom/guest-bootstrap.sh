@@ -2,8 +2,10 @@
 set -eu
 
 # Provision Bloom inside a workspace using the authenticated login address as a
-# watch-only wallet. This helper has no signer path by design: it accepts one
-# EVM address, never a key/passphrase, and refuses to run beside signer state.
+# watch-only wallet. This helper has no direct signer path: it accepts one EVM
+# address, never a key/passphrase, and refuses to run beside signer state.
+# Transaction signing is relayed to the user's browser wallet through the guest
+# control protocol — private keys never enter the workspace VM.
 
 BLOOM_BIN=${BLOOM_BIN:-/usr/local/bin/bloom}
 BLOOM_WORKSPACE_ROOT=/workspace

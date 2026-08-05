@@ -10,8 +10,8 @@ export const BloomGuestStatus = z.object({
     files: z.boolean(),
     jobs: z.boolean(),
     bloomRead: z.boolean(),
-    walletSigning: z.literal(false),
-    transactions: z.literal(false),
+    walletSigning: z.boolean(),
+    transactions: z.boolean(),
   }),
   helper: z.object({ name: z.literal("bloom-workspace"), protocolVersion: z.literal(1) }),
 }).superRefine((status, context) => {
