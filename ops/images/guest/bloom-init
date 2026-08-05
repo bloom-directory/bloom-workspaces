@@ -71,8 +71,14 @@ if [ -f /run/bloom/egress.env ]; then
 fi
 
 workspace_identity="$(/usr/local/sbin/bloom-workspace-identity $(cat /proc/cmdline))"
+bloom_petals=""
+for argument in $(cat /proc/cmdline); do
+  case "$argument" in
+    bloom_petals=*) bloom_petals="${argument#bloom_petals=}" ;;
+  esac
+done
 if [ -n "$workspace_identity" ]; then
-  if /bin/setpriv \
+  if BLOOM_PREINSTALLED_PETALS="$bloom_petals" /bin/setpriv \
     --reuid=1000 --regid=1000 --clear-groups --no-new-privs \
     --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
     /usr/bin/env -i HOME=/workspace USER=workspace LOGNAME=workspace \

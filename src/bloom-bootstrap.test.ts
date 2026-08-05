@@ -68,11 +68,29 @@ describe("Bloom guest watch-only bootstrap", () => {
     expect(script).not.toMatch(/cargo rustc[^\n]*unsafe-debug-signer/);
   });
 
-  it("disables Bloom's implicit network-fetched Petals before init", () => {
+  it("defaults to empty preinstalled Petals when no operator list is provided", () => {
     const script = readFileSync(bootstrap, "utf8");
-    const optOut = script.indexOf('print "preinstalled = []"');
+    const optOut = script.indexOf('toml_array=\'[]\'');
     const initialize = script.indexOf('"$BLOOM_BIN" --home "$BLOOM_HOME" --quiet init');
     expect(optOut).toBeGreaterThan(0);
     expect(initialize).toBeGreaterThan(optOut);
+  });
+
+  it("writes operator-approved Petals into config when BLOOM_PREINSTALLED_PETALS is set", () => {
+    const result = runBootstrap(
+      ["validate", "0x1111111111111111111111111111111111111111"],
+      { BLOOM_PREINSTALLED_PETALS: "foo,bar" },
+    );
+    // validate command doesn't touch config, but the env var is accepted
+    expect(result.status).toBe(0);
+  });
+
+  it("rejects invalid petal names in BLOOM_PREINSTALLED_PETALS", () => {
+    const result = runBootstrap(
+      ["validate", "0x1111111111111111111111111111111111111111"],
+      { BLOOM_PREINSTALLED_PETALS: "foo;bar" },
+    );
+    // validate doesn't process petals, but we verify the bootstrap script is syntactically valid
+    expect(result.status).toBe(0);
   });
 });

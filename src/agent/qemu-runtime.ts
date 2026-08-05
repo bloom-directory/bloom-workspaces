@@ -59,7 +59,7 @@ export class QemuRuntime extends PtyRuntime {
         "-smp", String(this.config.vmVcpus),
         "-m", String(this.config.vmMemoryMib),
         "-kernel", this.config.vmKernel,
-        "-append", `console=ttyS0 reboot=k panic=1 root=/dev/vda rw init=/usr/local/sbin/bloom-init bloom_transport=qemu bloom_deadline=${deadline}${workspaceDisk ? " bloom_workspace=/dev/vdb" : ""}${egress ? ` ${egress.kernelArgument}` : ""}${spec.identity ? ` bloom_identity=${spec.identity.walletAddress}` : ""}`,
+        "-append", `console=ttyS0 reboot=k panic=1 root=/dev/vda rw init=/usr/local/sbin/bloom-init bloom_transport=qemu bloom_deadline=${deadline}${workspaceDisk ? " bloom_workspace=/dev/vdb" : ""}${egress ? ` ${egress.kernelArgument}` : ""}${spec.identity ? ` bloom_identity=${spec.identity.walletAddress}` : ""}${this.config.preinstalledPetals.length ? ` bloom_petals=${this.config.preinstalledPetals.join(",")}` : ""}`,
         "-drive", `file=${rootfs},if=virtio,format=raw,cache=none,aio=native`,
         ...(workspaceDisk ? ["-drive", `file=${workspaceDisk},if=virtio,format=raw,cache=none,aio=native`] : []),
         "-chardev", `socket,id=bloom-control,path=${controlSocket},server=on,wait=off`,

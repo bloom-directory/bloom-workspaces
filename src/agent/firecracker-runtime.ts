@@ -290,7 +290,7 @@ export class FirecrackerRuntime implements WorkspaceRuntime {
 function vmConfig(config: Config, spec: RuntimeSpec, kernel: string, rootfs: string, vsockPath: string, workspaceDisk?: string, egress?: WorkspaceEgress) {
   const deadline = Math.floor(spec.leaseExpiresAt / 1000);
   return {
-    "boot-source": { kernel_image_path: kernel, boot_args: `console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/local/sbin/bloom-init bloom_transport=vsock bloom_deadline=${deadline}${workspaceDisk ? " bloom_workspace=/dev/vdb" : ""}${egress ? ` ${egress.kernelArgument}` : ""}${spec.identity ? ` bloom_identity=${spec.identity.walletAddress}` : ""}` },
+    "boot-source": { kernel_image_path: kernel, boot_args: `console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/local/sbin/bloom-init bloom_transport=vsock bloom_deadline=${deadline}${workspaceDisk ? " bloom_workspace=/dev/vdb" : ""}${egress ? ` ${egress.kernelArgument}` : ""}${spec.identity ? ` bloom_identity=${spec.identity.walletAddress}` : ""}${config.preinstalledPetals.length ? ` bloom_petals=${config.preinstalledPetals.join(",")}` : ""}` },
     drives: [
       { drive_id: "rootfs", path_on_host: rootfs, is_root_device: true, is_read_only: false },
       ...(workspaceDisk ? [{ drive_id: "workspace", path_on_host: workspaceDisk, is_root_device: false, is_read_only: false }] : []),

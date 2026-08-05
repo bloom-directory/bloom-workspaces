@@ -15,6 +15,15 @@ const hostList = z.string().default(DEFAULT_PACKAGE_HOSTS.join(",")).transform((
   return hosts;
 });
 
+const petalList = z.string().default("").transform((value, context) => {
+  const petals = value.split(",").map((p) => p.trim()).filter(Boolean);
+  if (petals.length > 32 || petals.some((p) => p.length > 128 || !/^[a-z0-9_-]+$/i.test(p))) {
+    context.addIssue({ code: "custom", message: "BLOOM_PREINSTALLED_PETALS contains invalid entries (max 32, alphanumeric/dash/underscore, max 128 chars each)" });
+    return z.NEVER;
+  }
+  return petals;
+});
+
 const Env = z.object({
   BLOOM_ORIGIN: z.string().url().default("http://127.0.0.1:8787"),
   BLOOM_PORT: integer(8787),
@@ -60,6 +69,7 @@ const Env = z.object({
   BLOOM_NFS_ENABLED: booleanString,
   BLOOM_NFS_KERNEL_CONFIG: z.string().optional(),
   BLOOM_STORAGE_QUOTA_MIB: z.coerce.number().int().min(16).max(5120).default(512),
+  BLOOM_PREINSTALLED_PETALS: petalList,
 });
 
 export type Config = ReturnType<typeof loadConfig>;
@@ -112,6 +122,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env, role: "all" 
     nfsEnabled: env.BLOOM_NFS_ENABLED,
     nfsKernelConfig: env.BLOOM_NFS_KERNEL_CONFIG ? resolve(env.BLOOM_NFS_KERNEL_CONFIG) : undefined,
     storageQuotaBytes: env.BLOOM_STORAGE_QUOTA_MIB * 1024 * 1024,
+    preinstalledPetals: env.BLOOM_PREINSTALLED_PETALS,
     sessionTtlMs: 12 * 60 * 60_000,
     challengeTtlMs: 5 * 60_000,
     agentRequestTimeoutMs: 30_000,

@@ -81,6 +81,30 @@ verify_watch_only_keystore() {
   [ "$stored" = "$expected" ] || die 'stored watch address does not match the authenticated login address'
 }
 
+validate_preinstalled_petals() {
+  config=$1
+  approved=$2
+  # Extract the preinstalled array contents from config.toml.
+  # Handles both single-line (preinstalled = ["a", "b"]) and multi-line forms.
+  entries=$(sed -n '/^preinstalled = \[/,/^\]/p' "$config" | tr -d '\n' | sed 's/.*\[//; s/\].*//')
+  # If empty array, nothing to check.
+  [ -n "$(printf '%s' "$entries" | tr -d ' \t')" ] || return 0
+  # Extract quoted values.
+  configured=$(printf '%s' "$entries" | tr ',' '\n' | sed 's/^[ \t]*"//; s/"[ \t]*$//' | grep -v '^$' || true)
+  # Build approved set from comma-separated list.
+  approved_set=$(printf '%s' "$approved" | tr ',' '\n' | grep -v '^$' || true)
+  # Check each configured petal is in the approved set.
+  while IFS= read -r petal; do
+    [ -n "$petal" ] || continue
+    case "$approved_set" in
+      *"$petal"*) ;;
+      *) die "preinstalled Petal '$petal' is not in the operator-approved list (BLOOM_PREINSTALLED_PETALS)" ;;
+    esac
+  done <<EOF
+$configured
+EOF
+}
+
 initialize_watch_wallet() {
   address=$1
   command -v "$BLOOM_BIN" >/dev/null 2>&1 || die "Bloom binary is unavailable: $BLOOM_BIN"
@@ -92,37 +116,59 @@ initialize_watch_wallet() {
 
   # `bloom init` provisions network-fetched Petals by default in v0.1.3.
   # First let a non-provisioning read command create Bloom's complete default
-  # config, then atomically persist the explicit empty-list opt-out. This keeps
-  # bootstrap offline and prevents remote executable content from entering the
-  # curated guest implicitly.
+  # config, then atomically persist the operator-approved Petal list. This keeps
+  # bootstrap deterministic: only operator-curated Petals enter the guest, not
+  # arbitrary remote executable content. Users can still `bloom install` explicit
+  # additions from the terminal (subject to the egress proxy allowlist).
   config=${BLOOM_HOME}/config.toml
+  operator_petals=${BLOOM_PREINSTALLED_PETALS:-}
   if [ ! -e "$config" ]; then
     "$BLOOM_BIN" --home "$BLOOM_HOME" --quiet status >/dev/null
     [ -f "$config" ] && [ ! -L "$config" ] || die 'Bloom did not create a regular config file'
     [ "$(grep -c '^preinstalled = ' "$config")" -eq 1 ] || \
       die 'Bloom config does not contain exactly one preinstalled Petals setting'
     config_staging=${config}.workspace-bootstrap
-    awk '
+    # Build the TOML array value from the operator-approved comma-separated list.
+    toml_array='[]'
+    if [ -n "$operator_petals" ]; then
+      toml_array=''
+      remainder=$operator_petals
+      while [ -n "$remainder" ]; do
+        petal=${remainder%%,*}
+        [ -n "$petal" ] || { remainder=${remainder#*,}; continue; }
+        case "$petal" in
+          *[!a-zA-Z0-9_-]*) die "invalid petal name in BLOOM_PREINSTALLED_PETALS: $petal" ;;
+        esac
+        toml_array="${toml_array}\"$(printf '%s' "$petal" | sed 's/\\/\\\\/g; s/"/\\"/g')\", "
+        remainder=${remainder#$petal}
+        remainder=${remainder#,}
+      done
+      toml_array="[${toml_array%, }]"
+    fi
+    awk -v replacement="preinstalled = $toml_array" '
       BEGIN { in_preinstalled = 0; seen = 0 }
       in_preinstalled == 1 {
         if ($0 ~ /^]$/) { in_preinstalled = 0 }
         next
       }
       /^preinstalled = \[/ {
-        print "preinstalled = []"
+        print replacement
         seen++
         if ($0 !~ /]$/) { in_preinstalled = 1 }
         next
       }
       { print }
       END { if (seen != 1 || in_preinstalled != 0) exit 42 }
-    ' "$config" > "$config_staging" || die 'could not safely disable preinstalled Petals'
+    ' "$config" > "$config_staging" || die 'could not safely set preinstalled Petals'
     chmod 0600 "$config_staging"
     mv -- "$config_staging" "$config"
   else
     [ -f "$config" ] && [ ! -L "$config" ] || die 'Bloom config must be a regular file'
-    grep -q '^preinstalled = \[\]$' "$config" || \
-      die 'preinstalled Petals must remain disabled in the watch-only workspace'
+    # On re-bootstrap (persistent workspace), validate that the preinstalled
+    # list contains only operator-approved entries.  This allows user-initiated
+    # `bloom install` additions that match the approved list while catching
+    # unexpected entries that may have entered through compromise.
+    validate_preinstalled_petals "$config" "$operator_petals"
   fi
   "$BLOOM_BIN" --home "$BLOOM_HOME" --quiet init >/dev/null
 

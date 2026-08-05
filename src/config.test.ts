@@ -86,6 +86,26 @@ describe("public configuration guardrails", () => {
     expect(() => loadConfig({ BLOOM_STORAGE_QUOTA_MIB: "8192" })).toThrow();
   });
 
+  it("defaults preinstalled petals to empty and respects operator override", () => {
+    expect(loadConfig({}).preinstalledPetals).toEqual([]);
+    expect(loadConfig({ BLOOM_PREINSTALLED_PETALS: "foo,bar" }).preinstalledPetals).toEqual(["foo", "bar"]);
+    expect(loadConfig({ BLOOM_PREINSTALLED_PETALS: "single-petal" }).preinstalledPetals).toEqual(["single-petal"]);
+    expect(loadConfig({ BLOOM_PREINSTALLED_PETALS: "  spaced  ,  trimmed  " }).preinstalledPetals).toEqual(["spaced", "trimmed"]);
+    expect(loadConfig({ BLOOM_PREINSTALLED_PETALS: "" }).preinstalledPetals).toEqual([]);
+  });
+
+  it("rejects invalid petal names", () => {
+    expect(() => loadConfig({ BLOOM_PREINSTALLED_PETALS: "foo;bar" })).toThrow();
+    expect(() => loadConfig({ BLOOM_PREINSTALLED_PETALS: "foo/bar" })).toThrow();
+    expect(() => loadConfig({ BLOOM_PREINSTALLED_PETALS: "foo bar" })).toThrow();
+    expect(() => loadConfig({ BLOOM_PREINSTALLED_PETALS: "../etc" })).toThrow();
+  });
+
+  it("rejects more than 32 petals", () => {
+    const too_many = Array.from({ length: 33 }, (_, i) => `p${i}`).join(",");
+    expect(() => loadConfig({ BLOOM_PREINSTALLED_PETALS: too_many })).toThrow();
+  });
+
   it("requires explicit SSH/NFS prerequisites in public mode", () => {
     const base = {
       BLOOM_PUBLIC_MODE: "1", BLOOM_ORIGIN: "https://workspaces.example.com", BLOOM_RUNTIME: "qemu",

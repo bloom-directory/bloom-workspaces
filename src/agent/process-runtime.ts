@@ -9,6 +9,12 @@ import { PtyRuntime } from "./pty-runtime.js";
 export class ProcessRuntime extends PtyRuntime {
   private readonly storage = new Map<string, RuntimeSpec["storage"]>();
   private readonly files = new WorkspaceDataFiles();
+  private readonly petals: readonly string[];
+
+  constructor(dataDir: string, petals: readonly string[] = []) {
+    super(dataDir);
+    this.petals = petals;
+  }
 
   override async create(spec: RuntimeSpec) {
     this.validateStorage(spec);
@@ -32,6 +38,7 @@ export class ProcessRuntime extends PtyRuntime {
         PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         PS1: "\\[\\e[38;5;114m\\]bloom-dev\\[\\e[0m\\]:\\w$ ",
         TERM: "xterm-256color",
+        ...(this.petals.length ? { BLOOM_PREINSTALLED_PETALS: this.petals.join(",") } : {}),
       },
       cleanup: this.cleanupDirectory(spec.id),
     };
