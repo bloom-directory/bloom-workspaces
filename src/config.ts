@@ -59,6 +59,7 @@ const Env = z.object({
   BLOOM_SSH_MAX_LEASE_MINUTES: z.coerce.number().int().min(1).max(120).default(15),
   BLOOM_NFS_ENABLED: booleanString,
   BLOOM_NFS_KERNEL_CONFIG: z.string().optional(),
+  BLOOM_STORAGE_QUOTA_MIB: z.coerce.number().int().min(16).max(5120).default(512),
 });
 
 export type Config = ReturnType<typeof loadConfig>;
@@ -110,6 +111,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env, role: "all" 
     sshMaxLeaseMs: env.BLOOM_SSH_MAX_LEASE_MINUTES * 60_000,
     nfsEnabled: env.BLOOM_NFS_ENABLED,
     nfsKernelConfig: env.BLOOM_NFS_KERNEL_CONFIG ? resolve(env.BLOOM_NFS_KERNEL_CONFIG) : undefined,
+    storageQuotaBytes: env.BLOOM_STORAGE_QUOTA_MIB * 1024 * 1024,
     sessionTtlMs: 12 * 60 * 60_000,
     challengeTtlMs: 5 * 60_000,
     agentRequestTimeoutMs: 30_000,

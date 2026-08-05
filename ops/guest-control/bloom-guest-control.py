@@ -1076,7 +1076,7 @@ def serve_sockets(control: GuestControl, listeners: list[socket.socket]) -> None
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bloom workspace guest control service")
     parser.add_argument("--workspace", default="/workspace")
-    parser.add_argument("--workspace-quota-bytes", type=int, default=128 * 1024 * 1024)
+    parser.add_argument("--workspace-quota-bytes", type=int, default=512 * 1024 * 1024)
     parser.add_argument("--job-uid", type=int, default=1000)
     parser.add_argument("--job-gid", type=int, default=1000)
     parser.add_argument("--stdio", action="store_true")

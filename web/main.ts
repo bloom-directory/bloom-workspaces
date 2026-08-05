@@ -414,7 +414,7 @@ function renderCapabilities() {
   persistentInput.disabled = persistence.status !== "available";
   if (persistentInput.disabled && persistentInput.checked) $<HTMLInputElement>('input[name="storage"][value="disposable"]').checked = true;
   $("persistent-choice").classList.toggle("choice-disabled", persistentInput.disabled);
-  $("persistent-choice").setAttribute("title", persistentInput.disabled ? persistence.reason : "128 MiB retained after the machine stops");
+  $("persistent-choice").setAttribute("title", persistentInput.disabled ? persistence.reason : "Persistent volume retained after the machine stops");
   syncCapabilityControls();
 }
 

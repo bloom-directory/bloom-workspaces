@@ -8,7 +8,6 @@ import type { StructuredJobSpec } from "../jobs/model.js";
 import type { SshLeaseBody } from "../ssh/api.js";
 
 const ACTIVE = "'queued','provisioning','running','stopping'";
-export const DEFAULT_STORAGE_QUOTA_BYTES = 128 * 1024 * 1024;
 
 export class WorkspaceError extends Error {
   constructor(message: string, readonly status = 400) { super(message); }
@@ -48,7 +47,7 @@ export class WorkspaceService {
       const row: WorkspaceRow = {
         id: randomUUID(), wallet: normalizedWallet, ip_hash: ipHash, state: "queued", runtime: this.config.runtime,
         created_at: now, lease_expires_at: now + this.config.leaseMs, stopped_at: null, failure: null,
-        storage_mode: storageMode, volume_id: volume?.id ?? null, storage_quota_bytes: volume?.quota_bytes ?? DEFAULT_STORAGE_QUOTA_BYTES,
+        storage_mode: storageMode, volume_id: volume?.id ?? null, storage_quota_bytes: volume?.quota_bytes ?? this.config.storageQuotaBytes,
       };
       this.db.prepare("INSERT INTO workspaces (id, wallet, ip_hash, state, runtime, created_at, lease_expires_at, storage_mode, volume_id, storage_quota_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(row.id, row.wallet, row.ip_hash, row.state, row.runtime, row.created_at, row.lease_expires_at, row.storage_mode, row.volume_id, row.storage_quota_bytes);
@@ -281,7 +280,7 @@ export class WorkspaceService {
       return { ...existing, last_attached_at: now };
     }
     const volume: PersistentVolumeRow = {
-      id: randomUUID(), wallet, quota_bytes: DEFAULT_STORAGE_QUOTA_BYTES, created_at: now, last_attached_at: now, destroyed_at: null,
+      id: randomUUID(), wallet, quota_bytes: this.config.storageQuotaBytes, created_at: now, last_attached_at: now, destroyed_at: null,
     };
     this.db.prepare("INSERT INTO persistent_volumes (id, wallet, quota_bytes, created_at, last_attached_at) VALUES (?, ?, ?, ?, ?)")
       .run(volume.id, volume.wallet, volume.quota_bytes, volume.created_at, volume.last_attached_at);

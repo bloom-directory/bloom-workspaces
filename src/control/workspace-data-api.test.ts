@@ -48,7 +48,7 @@ describe("authenticated workspace data API", () => {
     const ownerCsrf = login.body.csrfToken as string;
     const created = await request(control.app).post("/api/workspaces")
       .set(ownerHeaders(config.origin, ownerCookie, ownerCsrf)).send({ storage: "persistent" }).expect(202);
-    expect(created.body.workspace.storage).toMatchObject({ mode: "persistent", quotaBytes: 128 * 1024 * 1024, retainedAfterStop: true });
+    expect(created.body.workspace.storage).toMatchObject({ mode: "persistent", quotaBytes: 512 * 1024 * 1024, retainedAfterStop: true });
     const firstId = created.body.workspace.id as string;
     await eventually(async () => (await ownerGet(control.app, ownerCookie, "/api/workspaces/current")).body.workspace?.state === "running");
 

@@ -79,6 +79,13 @@ describe("public configuration guardrails", () => {
     expect(loadConfig({}).persistenceEnabled).toBe(true);
   });
 
+  it("defaults storage quota to 512 MiB and respects operator override", () => {
+    expect(loadConfig({}).storageQuotaBytes).toBe(512 * 1024 * 1024);
+    expect(loadConfig({ BLOOM_STORAGE_QUOTA_MIB: "2048" }).storageQuotaBytes).toBe(2 * 1024 * 1024 * 1024);
+    expect(() => loadConfig({ BLOOM_STORAGE_QUOTA_MIB: "8" })).toThrow();
+    expect(() => loadConfig({ BLOOM_STORAGE_QUOTA_MIB: "8192" })).toThrow();
+  });
+
   it("requires explicit SSH/NFS prerequisites in public mode", () => {
     const base = {
       BLOOM_PUBLIC_MODE: "1", BLOOM_ORIGIN: "https://workspaces.example.com", BLOOM_RUNTIME: "qemu",

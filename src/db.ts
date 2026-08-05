@@ -81,7 +81,7 @@ export function openDatabase(path: string) {
       failure TEXT,
       storage_mode TEXT NOT NULL DEFAULT 'disposable' CHECK (storage_mode IN ('disposable','persistent')),
       volume_id TEXT REFERENCES persistent_volumes(id),
-      storage_quota_bytes INTEGER NOT NULL DEFAULT 134217728 CHECK (storage_quota_bytes > 0)
+      storage_quota_bytes INTEGER NOT NULL DEFAULT 536870912 CHECK (storage_quota_bytes > 0)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS workspaces_wallet ON workspaces(wallet, created_at DESC);
     CREATE INDEX IF NOT EXISTS workspaces_state ON workspaces(state, created_at);
@@ -112,5 +112,5 @@ function migrateWorkspaceStorage(db: DatabaseSync) {
   const columns = new Set((db.prepare("PRAGMA table_info(workspaces)").all() as unknown as Array<{ name: string }>).map((column) => column.name));
   if (!columns.has("storage_mode")) db.exec("ALTER TABLE workspaces ADD COLUMN storage_mode TEXT NOT NULL DEFAULT 'disposable' CHECK (storage_mode IN ('disposable','persistent'))");
   if (!columns.has("volume_id")) db.exec("ALTER TABLE workspaces ADD COLUMN volume_id TEXT REFERENCES persistent_volumes(id)");
-  if (!columns.has("storage_quota_bytes")) db.exec("ALTER TABLE workspaces ADD COLUMN storage_quota_bytes INTEGER NOT NULL DEFAULT 134217728 CHECK (storage_quota_bytes > 0)");
+  if (!columns.has("storage_quota_bytes")) db.exec("ALTER TABLE workspaces ADD COLUMN storage_quota_bytes INTEGER NOT NULL DEFAULT 536870912 CHECK (storage_quota_bytes > 0)");
 }
