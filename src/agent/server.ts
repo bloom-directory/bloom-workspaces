@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import { lstat, mkdir, readFile, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Duplex } from "node:stream";
