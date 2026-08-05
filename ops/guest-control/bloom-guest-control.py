@@ -56,6 +56,7 @@ REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 EVM_ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
 SSH_CA_PUBLIC_KEY = re.compile(r"^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$")
+OUTBOX_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 WORKSPACE_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 USER_ENV_EXACT = frozenset(
     {
@@ -308,12 +309,11 @@ class WorkspaceFiles:
                 final_size = os.fstat(descriptor).st_size
             finally:
                 os.close(descriptor)
-            used_after = self._directory_bytes()
             return {
                 "path": "/".join(parts),
                 "size": final_size,
                 "nextOffset": start + len(chunk),
-                "usedBytes": used_after,
+                "usedBytes": used - prior + resulting_size,
                 "quotaBytes": self.quota_bytes,
             }
 
@@ -803,6 +803,17 @@ class GuestControl:
             "helper": {"name": "bloom-workspace", "protocolVersion": PROTOCOL_VERSION},
         }
 
+    @staticmethod
+    def _validate_outbox_identifier(value: Any, label: str, max_len: int = 64) -> None:
+        """Validate that an outbox identifier is safe for VFS path interpolation."""
+        require(
+            isinstance(value, str)
+            and 1 <= len(value) <= max_len
+            and OUTBOX_ID.fullmatch(value) is not None,
+            "invalid_request",
+            f"invalid {label}",
+        )
+
     def _bloom_ipc(self, method: str, params: dict[str, Any]) -> Any:
         """Call bloom serve's IPC socket."""
         require(os.path.exists(BLOOM_SOCKET_PATH), "unavailable", "Bloom IPC socket is not available")
@@ -849,9 +860,9 @@ class GuestControl:
         chain = request["chain"]
         wallet = request["wallet"]
         confirm_text = request["confirmText"]
-        require(isinstance(tx_id, str) and len(tx_id) <= 64, "invalid_request", "invalid tx id")
-        require(isinstance(chain, str) and len(chain) <= 32, "invalid_request", "invalid chain")
-        require(isinstance(wallet, str) and len(wallet) <= 64, "invalid_request", "invalid wallet name")
+        self._validate_outbox_identifier(tx_id, "tx id")
+        self._validate_outbox_identifier(chain, "chain", max_len=32)
+        self._validate_outbox_identifier(wallet, "wallet")
         require(isinstance(confirm_text, str) and len(confirm_text.strip()) > 0, "invalid_request", "confirm text is required")
         path = f"/wallets/{wallet}/chains/{chain}/outbox/pending/{tx_id}/confirm"
         body_b64 = base64.b64encode(confirm_text.encode()).decode()
@@ -863,9 +874,9 @@ class GuestControl:
         tx_id = request["txId"]
         chain = request["chain"]
         wallet = request["wallet"]
-        require(isinstance(tx_id, str) and len(tx_id) <= 64, "invalid_request", "invalid tx id")
-        require(isinstance(chain, str) and len(chain) <= 32, "invalid_request", "invalid chain")
-        require(isinstance(wallet, str) and len(wallet) <= 64, "invalid_request", "invalid wallet name")
+        self._validate_outbox_identifier(tx_id, "tx id")
+        self._validate_outbox_identifier(chain, "chain", max_len=32)
+        self._validate_outbox_identifier(wallet, "wallet")
         path = f"/wallets/{wallet}/chains/{chain}/outbox/pending/{tx_id}/cancel"
         body_b64 = base64.b64encode(b"cancel").decode()
         self._bloom_ipc("write", {"path": path, "bytes_b64": body_b64})

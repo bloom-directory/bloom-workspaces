@@ -247,7 +247,7 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
   app.post("/api/workspaces/:id/outbox/confirm", requireSession, async (request, response, next) => {
     try {
       const { session } = response.locals.context as { session: Session };
-      const body = z.object({ id: z.string().min(1).max(64), chain: z.string().min(1).max(32), wallet: z.string().min(1).max(64), confirmText: z.string().min(1) }).strict().parse(request.body);
+      const body = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), chain: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/), wallet: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), confirmText: z.string().min(1) }).strict().parse(request.body);
       await workspaces.outboxConfirm(session.wallet, String(request.params.id ?? ""), body);
       response.status(204).end();
     } catch (error) { next(error); }
@@ -255,7 +255,7 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
   app.post("/api/workspaces/:id/outbox/cancel", requireSession, async (request, response, next) => {
     try {
       const { session } = response.locals.context as { session: Session };
-      const body = z.object({ id: z.string().min(1).max(64), chain: z.string().min(1).max(32), wallet: z.string().min(1).max(64) }).strict().parse(request.body);
+      const body = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), chain: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/), wallet: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/) }).strict().parse(request.body);
       await workspaces.outboxCancel(session.wallet, String(request.params.id ?? ""), body);
       response.status(204).end();
     } catch (error) { next(error); }

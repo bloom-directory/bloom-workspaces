@@ -211,7 +211,7 @@ export async function startAgent(config: Config, runtime: WorkspaceRuntime) {
   app.post("/v1/workspaces/:id/outbox/confirm", async (request, response, next) => {
     try {
       const call = requireGuest(runtime, request.params.id ?? "");
-      const body = z.object({ id: z.string().min(1).max(64), chain: z.string().min(1).max(32), wallet: z.string().min(1).max(64), confirmText: z.string().min(1) }).strict().parse(request.body);
+      const body = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), chain: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/), wallet: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), confirmText: z.string().min(1) }).strict().parse(request.body);
       const result = await call({ version: 1, id: `outbox_confirm_${(request.params.id ?? "").replaceAll("-", "")}`, operation: "outbox.confirm", txId: body.id, chain: body.chain, wallet: body.wallet, confirmText: body.confirmText }, 10_000);
       response.json(result);
     } catch (error) { next(error); }
@@ -219,7 +219,7 @@ export async function startAgent(config: Config, runtime: WorkspaceRuntime) {
   app.post("/v1/workspaces/:id/outbox/cancel", async (request, response, next) => {
     try {
       const call = requireGuest(runtime, request.params.id ?? "");
-      const body = z.object({ id: z.string().min(1).max(64), chain: z.string().min(1).max(32), wallet: z.string().min(1).max(64) }).strict().parse(request.body);
+      const body = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), chain: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/), wallet: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/) }).strict().parse(request.body);
       const result = await call({ version: 1, id: `outbox_cancel_${(request.params.id ?? "").replaceAll("-", "")}`, operation: "outbox.cancel", txId: body.id, chain: body.chain, wallet: body.wallet }, 10_000);
       response.json(result);
     } catch (error) { next(error); }

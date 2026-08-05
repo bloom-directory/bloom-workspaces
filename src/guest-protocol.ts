@@ -7,6 +7,10 @@ export const MAX_FILE_CHUNK_BYTES = 256 * 1024;
 export const MAX_JOB_LOG_CHUNK_BYTES = 256 * 1024;
 
 const RequestId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+/** Safe identifier for Bloom outbox VFS paths — blocks path traversal characters. */
+const OutboxId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+const OutboxChain = z.string().regex(/^[A-Za-z0-9_-]{1,32}$/);
+const OutboxWallet = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 const RelativePath = z.string().min(1).max(1024).refine(isSafeWorkspacePath, "unsafe workspace path");
 const WorkspaceDirectory = z.union([z.literal("."), RelativePath]);
 const Base64Chunk = z.string().max(Math.ceil(MAX_FILE_CHUNK_BYTES / 3) * 4 + 4)
@@ -62,16 +66,16 @@ export const GuestRequest = z.discriminatedUnion("operation", [
   Envelope.extend({ operation: z.literal("outbox.pending") }),
   Envelope.extend({
     operation: z.literal("outbox.confirm"),
-    txId: z.string().min(1).max(64),
-    chain: z.string().min(1).max(32),
-    wallet: z.string().min(1).max(64),
+    txId: OutboxId,
+    chain: OutboxChain,
+    wallet: OutboxWallet,
     confirmText: z.string().min(1),
   }),
   Envelope.extend({
     operation: z.literal("outbox.cancel"),
-    txId: z.string().min(1).max(64),
-    chain: z.string().min(1).max(32),
-    wallet: z.string().min(1).max(64),
+    txId: OutboxId,
+    chain: OutboxChain,
+    wallet: OutboxWallet,
   }),
 ]);
 

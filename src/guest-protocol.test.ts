@@ -51,6 +51,25 @@ describe("guest control protocol", () => {
     expect(GuestRequest.safeParse({ ...request, caPublicKey: "-----BEGIN OPENSSH PRIVATE KEY-----" }).success).toBe(false);
   });
 
+  it("rejects path traversal in outbox confirm and cancel identifiers", () => {
+    const validConfirm = { ...envelope, operation: "outbox.confirm", txId: "tx_abc123", chain: "8453", wallet: "my-wallet", confirmText: "confirmed" };
+    const validCancel = { ...envelope, operation: "outbox.cancel", txId: "tx_abc123", chain: "8453", wallet: "my-wallet" };
+    expect(GuestRequest.safeParse(validConfirm).success).toBe(true);
+    expect(GuestRequest.safeParse(validCancel).success).toBe(true);
+
+    // Path traversal payloads must be rejected at the protocol layer
+    for (const traversal of ["../../..", "foo/bar", "..", ".", "a\\b", "x\0y"]) {
+      const confirmPayload = { ...envelope, operation: "outbox.confirm", txId: traversal, chain: "8453", wallet: "ok", confirmText: "ok" };
+      const cancelPayload = { ...envelope, operation: "outbox.cancel", txId: "ok", chain: traversal, wallet: "ok" };
+      expect(GuestRequest.safeParse(confirmPayload).success, `outbox.confirm txId="${traversal}"`).toBe(false);
+      expect(GuestRequest.safeParse(cancelPayload).success, `outbox.cancel chain="${traversal}"`).toBe(false);
+    }
+
+    // Empty strings must be rejected
+    expect(GuestRequest.safeParse({ ...validConfirm, txId: "" }).success).toBe(false);
+    expect(GuestRequest.safeParse({ ...validCancel, wallet: "" }).success).toBe(false);
+  });
+
   it("frames partial and multiple responses without unbounded buffering", () => {
     const first = encodeGuestFrame({ ...envelope, operation: "hello" });
     const second = encodeGuestFrame({ ...envelope, id: "request_2", operation: "bloom.status" });
