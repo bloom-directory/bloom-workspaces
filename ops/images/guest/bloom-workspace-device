@@ -1,0 +1,12 @@
+#!/bin/busybox sh
+
+for argument in "$@"; do
+  case "$argument" in
+    bloom_workspace=/dev/vdb)
+      printf '/dev/vdb\n'
+      exit 0
+      ;;
+  esac
+done
+
+exit 0

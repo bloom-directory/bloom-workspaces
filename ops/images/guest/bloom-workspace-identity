@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+identity=""
+for argument in "$@"; do
+  case "$argument" in
+    bloom_identity=*)
+      candidate=${argument#bloom_identity=}
+      if [ "${#candidate}" -eq 42 ] && printf '%s\n' "$candidate" | grep -Eq '^0x[0-9a-f]{40}$'; then
+        identity=$candidate
+      fi
+      ;;
+  esac
+done
+printf '%s\n' "$identity"

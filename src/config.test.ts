@@ -48,4 +48,45 @@ describe("public configuration guardrails", () => {
     expect(config.runtime).toBe("qemu");
     expect(config.turnstileSecret).toBeUndefined();
   });
+
+  it("accepts controlled public egress but continues to reject raw Internet access", () => {
+    const base = {
+      BLOOM_PUBLIC_MODE: "1",
+      BLOOM_ORIGIN: "https://workspaces.example.com",
+      BLOOM_RUNTIME: "qemu",
+      BLOOM_SESSION_SECRET: "s".repeat(32),
+      BLOOM_AGENT_TOKEN: "a".repeat(32),
+      BLOOM_TURNSTILE_SITE_KEY: "site",
+      BLOOM_TURNSTILE_SECRET: "secret",
+    };
+    expect(loadConfig({ ...base, BLOOM_VM_EGRESS: "controlled" }).vmEgress).toBe("controlled");
+    expect(() => loadConfig({ ...base, BLOOM_VM_EGRESS: "internet" })).toThrow(/unfiltered/);
+  });
+
+  it("bounds and parses the controlled egress policy", () => {
+    const config = loadConfig({
+      BLOOM_EGRESS_ALLOWED_HOSTS: "registry.npmjs.org, *.npmjs.org",
+      BLOOM_EGRESS_MAX_CONNECTIONS: "12",
+      BLOOM_EGRESS_MAX_MIB_PER_CONNECTION: "64",
+    });
+    expect(config.egressAllowedHosts).toEqual(["registry.npmjs.org", "*.npmjs.org"]);
+    expect(config.egressMaxConnections).toBe(12);
+    expect(config.egressMaxBytesPerConnection).toBe(64 * 1024 * 1024);
+  });
+
+  it("allows the operator to fail closed persistent allocation", () => {
+    expect(loadConfig({ BLOOM_PERSISTENCE_ENABLED: "0" }).persistenceEnabled).toBe(false);
+    expect(loadConfig({}).persistenceEnabled).toBe(true);
+  });
+
+  it("requires explicit SSH/NFS prerequisites in public mode", () => {
+    const base = {
+      BLOOM_PUBLIC_MODE: "1", BLOOM_ORIGIN: "https://workspaces.example.com", BLOOM_RUNTIME: "qemu",
+      BLOOM_SESSION_SECRET: "s".repeat(32), BLOOM_AGENT_TOKEN: "a".repeat(32),
+      BLOOM_TURNSTILE_SITE_KEY: "site", BLOOM_TURNSTILE_SECRET: "secret",
+    };
+    expect(() => loadConfig({ ...base, BLOOM_SSH_ENABLED: "1" })).toThrow(/SSH_CA_KEY/);
+    expect(() => loadConfig({ ...base, BLOOM_NFS_ENABLED: "1" })).toThrow(/requires the SSH gateway/);
+    expect(loadConfig({ ...base, BLOOM_SSH_ENABLED: "1", BLOOM_SSH_CA_KEY: "/run/bloom/ca" }).sshEnabled).toBe(true);
+  });
 });

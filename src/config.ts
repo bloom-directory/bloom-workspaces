@@ -1,9 +1,19 @@
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { z } from "zod";
+import { DEFAULT_PACKAGE_HOSTS, EgressPolicy } from "./agent/egress-policy.js";
 
 const booleanString = z.enum(["0", "1"]).default("0").transform((value) => value === "1");
+const enabledBooleanString = z.enum(["0", "1"]).default("1").transform((value) => value === "1");
 const integer = (fallback: number) => z.coerce.number().int().positive().default(fallback);
+const hostList = z.string().default(DEFAULT_PACKAGE_HOSTS.join(",")).transform((value, context) => {
+  const hosts = value.split(",").map((host) => host.trim()).filter(Boolean);
+  if (hosts.length > 64 || hosts.some((host) => host.length > 253)) {
+    context.addIssue({ code: "custom", message: "Egress hostname allowlist is invalid" });
+    return z.NEVER;
+  }
+  return hosts;
+});
 
 const Env = z.object({
   BLOOM_ORIGIN: z.string().url().default("http://127.0.0.1:8787"),
@@ -38,7 +48,17 @@ const Env = z.object({
   BLOOM_QEMU_BIN: z.string().default("qemu-system-x86_64"),
   BLOOM_VM_MEMORY_MIB: z.coerce.number().int().min(128).max(8192).default(512),
   BLOOM_VM_VCPUS: z.coerce.number().int().min(1).max(8).default(1),
-  BLOOM_VM_EGRESS: z.enum(["none", "internet"]).default("none"),
+  BLOOM_VM_EGRESS: z.enum(["none", "controlled", "internet"]).default("none"),
+  BLOOM_EGRESS_ALLOWED_HOSTS: hostList,
+  BLOOM_EGRESS_MAX_CONNECTIONS: z.coerce.number().int().min(1).max(256).default(32),
+  BLOOM_EGRESS_MAX_MIB_PER_CONNECTION: z.coerce.number().int().min(1).max(1024).default(128),
+  BLOOM_EGRESS_CONNECTION_SECONDS: z.coerce.number().int().min(5).max(3600).default(300),
+  BLOOM_PERSISTENCE_ENABLED: enabledBooleanString,
+  BLOOM_SSH_ENABLED: booleanString,
+  BLOOM_SSH_CA_KEY: z.string().optional(),
+  BLOOM_SSH_MAX_LEASE_MINUTES: z.coerce.number().int().min(1).max(120).default(15),
+  BLOOM_NFS_ENABLED: booleanString,
+  BLOOM_NFS_KERNEL_CONFIG: z.string().optional(),
 });
 
 export type Config = ReturnType<typeof loadConfig>;
@@ -80,11 +100,24 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env, role: "all" 
     vmMemoryMib: env.BLOOM_VM_MEMORY_MIB,
     vmVcpus: env.BLOOM_VM_VCPUS,
     vmEgress: env.BLOOM_VM_EGRESS,
+    egressAllowedHosts: env.BLOOM_EGRESS_ALLOWED_HOSTS,
+    egressMaxConnections: env.BLOOM_EGRESS_MAX_CONNECTIONS,
+    egressMaxBytesPerConnection: env.BLOOM_EGRESS_MAX_MIB_PER_CONNECTION * 1024 * 1024,
+    egressMaxConnectionMs: env.BLOOM_EGRESS_CONNECTION_SECONDS * 1_000,
+    persistenceEnabled: env.BLOOM_PERSISTENCE_ENABLED,
+    sshEnabled: env.BLOOM_SSH_ENABLED,
+    sshCaKeyPath: env.BLOOM_SSH_CA_KEY ? resolve(env.BLOOM_SSH_CA_KEY) : undefined,
+    sshMaxLeaseMs: env.BLOOM_SSH_MAX_LEASE_MINUTES * 60_000,
+    nfsEnabled: env.BLOOM_NFS_ENABLED,
+    nfsKernelConfig: env.BLOOM_NFS_KERNEL_CONFIG ? resolve(env.BLOOM_NFS_KERNEL_CONFIG) : undefined,
     sessionTtlMs: 12 * 60 * 60_000,
     challengeTtlMs: 5 * 60_000,
-    agentRequestTimeoutMs: 15_000,
+    agentRequestTimeoutMs: 30_000,
   } as const;
 
+  // Parse every hostname pattern during startup, even when egress is currently
+  // disabled, so enabling a bad policy cannot fail later during provisioning.
+  new EgressPolicy({ allowedHosts: config.egressAllowedHosts });
   assertSafeConfiguration(config, role);
   return config;
 }
@@ -100,7 +133,18 @@ function assertSafeConfiguration(config: {
   agentToken: string;
   vmEgress: string;
   firecrackerJailed: boolean;
+  sshEnabled: boolean;
+  sshCaKeyPath: string | undefined;
+  nfsEnabled: boolean;
+  nfsKernelConfig: string | undefined;
 }, role: "all" | "control" | "agent") {
+  const capabilityErrors: string[] = [];
+  if (config.sshEnabled && config.runtime !== "qemu") capabilityErrors.push("SSH is available only on the QEMU reference runtime");
+  if (role !== "control" && config.sshEnabled && !config.sshCaKeyPath) capabilityErrors.push("BLOOM_SSH_CA_KEY is required when SSH is enabled");
+  if (config.nfsEnabled && !config.sshEnabled) capabilityErrors.push("native NFS requires the SSH gateway");
+  if (config.nfsEnabled && config.runtime !== "qemu") capabilityErrors.push("native NFS is available only on the QEMU reference runtime");
+  if (role !== "control" && config.nfsEnabled && !config.nfsKernelConfig) capabilityErrors.push("BLOOM_NFS_KERNEL_CONFIG is required to verify the custom NFSD kernel");
+  if (capabilityErrors.length) throw new Error(`Unsafe capability configuration: ${capabilityErrors.join("; ")}`);
   if (!config.publicMode) return;
   const errors: string[] = [];
   if (role !== "agent" && !config.origin.startsWith("https://")) errors.push("BLOOM_ORIGIN must use HTTPS");

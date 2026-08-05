@@ -3,58 +3,189 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Disposable, wallet-authenticated Bloom workspaces." />
+    <meta name="description" content="Wallet-authenticated Linux workspaces with bounded tools, files, jobs, and connectivity." />
     <title>Bloom Workspaces</title>
   </head>
   <body>
+    <a class="skip-link" href="#workspace-console">Skip to workspace</a>
     <main>
-      <nav>
+      <nav aria-label="Primary navigation">
         <a class="brand" href="/" aria-label="Bloom Workspaces home">
-          <span class="mark">B</span><span>Bloom Workspaces</span>
+          <span class="mark" aria-hidden="true">B</span><span>Bloom Workspaces</span>
         </a>
-        <span id="status" class="pill">Checking…</span>
+        <div class="nav-session">
+          <span id="status" class="pill">Checking…</span>
+          <button id="logout" class="quiet hidden" type="button">Sign out</button>
+        </div>
       </nav>
 
-      <section class="hero">
+      <section class="hero" aria-labelledby="page-title">
         <p class="eyebrow">Remote compute, without the install</p>
-        <h1>A disposable Linux workspace,<br />opened from your browser.</h1>
-        <p class="lede">Sign in with a wallet. Get an isolated, short-lived machine. Keep your keys on your device.</p>
-        <div id="auth-actions" class="actions">
-          <button id="connect" class="primary">Connect wallet</button>
-          <button id="dev-login" class="secondary hidden">Local demo sign-in</button>
+        <h1 id="page-title">A Linux workspace,<br />ready when you are.</h1>
+        <p class="lede">Sign in with a wallet. Work in an isolated machine with an honest account of what it can—and cannot—reach.</p>
+        <div id="auth-actions" class="wallet-actions" aria-busy="false">
+          <button id="connect" class="primary" type="button">Browser wallet</button>
+          <button id="connect-mobile" class="secondary" type="button">Mobile wallet / QR</button>
+          <button id="dev-login" class="secondary hidden" type="button">Local demo sign-in</button>
         </div>
-        <p id="message" class="message" role="status"></p>
+        <p id="auth-note" class="auth-note">Use a browser wallet here, or connect a compatible mobile wallet by QR code or deep link. Login asks only for a message signature—never a transaction, seed phrase, or private key.</p>
+        <p id="message" class="message" role="status" aria-live="polite"></p>
       </section>
 
-      <section id="dashboard" class="dashboard hidden">
+      <section id="dashboard" class="dashboard hidden" aria-label="Workspace dashboard">
         <div class="panel workspace-panel">
-          <div>
+          <div class="workspace-summary">
             <p class="eyebrow">Your workspace</p>
             <h2 id="workspace-title">Ready when you are</h2>
-            <p id="workspace-detail" class="muted">One workspace per wallet. Sessions expire automatically.</p>
+            <p id="workspace-detail" class="muted">One active workspace per wallet. Running sessions expire automatically.</p>
+            <p id="storage-summary" class="storage-summary">Choose how /workspace should be stored.</p>
           </div>
-          <div class="actions">
-            <button id="create" class="primary">Create workspace</button>
-            <button id="stop" class="danger hidden">Destroy now</button>
+          <div class="workspace-controls">
+            <fieldset id="storage-choice" class="storage-choice">
+              <legend>Storage</legend>
+              <label class="choice-card">
+                <input type="radio" name="storage" value="disposable" checked />
+                <span><strong>Disposable</strong><small>Deleted when the machine stops</small></span>
+              </label>
+              <label id="persistent-choice" class="choice-card">
+                <input id="persistent-storage" type="radio" name="storage" value="persistent" />
+                <span><strong>Persistent</strong><small>128 MiB retained for your wallet</small></span>
+              </label>
+            </fieldset>
+            <div class="actions">
+              <button id="create" class="primary" type="button">Create workspace</button>
+              <button id="stop" class="danger hidden" type="button">Stop workspace</button>
+              <button id="delete-volume" class="danger-outline hidden" type="button">Delete saved volume</button>
+            </div>
           </div>
           <div id="turnstile" class="hidden" aria-label="Human verification"></div>
         </div>
 
-        <div id="terminal-wrap" class="terminal-shell hidden">
-          <div class="terminal-bar">
-            <div class="lights"><i></i><i></i><i></i></div>
-            <span id="lease">Connecting…</span>
+        <section class="capabilities-section" aria-labelledby="capabilities-title">
+          <div class="section-heading">
+            <div><p class="eyebrow">Deployment contract</p><h2 id="capabilities-title">What this workspace supports</h2></div>
+            <p class="muted">Unavailable features stay visible with a reason.</p>
           </div>
-          <div id="terminal" aria-label="Workspace terminal"></div>
-        </div>
+          <div id="capability-grid" class="capability-grid" aria-live="polite"></div>
+        </section>
+
+        <section id="workspace-console" class="console hidden" aria-labelledby="console-title">
+          <div class="console-heading">
+            <div>
+              <p class="eyebrow">Live workspace</p>
+              <h2 id="console-title">Workspace console</h2>
+            </div>
+            <span id="lease" class="lease">Connecting…</span>
+          </div>
+          <div id="workspace-tabs" class="tabs" role="tablist" aria-label="Workspace tools">
+            <button id="tab-terminal" role="tab" aria-selected="true" aria-controls="panel-terminal" data-panel="terminal" type="button">Terminal</button>
+            <button id="tab-files" role="tab" aria-selected="false" aria-controls="panel-files" data-panel="files" type="button">Files</button>
+            <button id="tab-jobs" role="tab" aria-selected="false" aria-controls="panel-jobs" data-panel="jobs" type="button">Jobs</button>
+            <button id="tab-bloom" role="tab" aria-selected="false" aria-controls="panel-bloom" data-panel="bloom" type="button">Bloom</button>
+            <button id="tab-connections" role="tab" aria-selected="false" aria-controls="panel-connections" data-panel="connections" type="button">Connect</button>
+          </div>
+
+          <div id="panel-terminal" class="tool-panel" role="tabpanel" aria-labelledby="tab-terminal">
+            <div class="terminal-shell">
+              <div class="terminal-bar"><div class="lights" aria-hidden="true"><i></i><i></i><i></i></div><span>Interactive shell · untrusted compute</span></div>
+              <div id="terminal" aria-label="Workspace terminal"></div>
+            </div>
+          </div>
+
+          <div id="panel-files" class="tool-panel hidden" role="tabpanel" aria-labelledby="tab-files">
+            <div class="tool-header">
+              <div><h3>Files in /workspace</h3><p class="muted">Authenticated transfer, limited to 8 MiB per file. Paths cannot leave this workspace.</p></div>
+              <button id="refresh-files" class="quiet" type="button">Refresh</button>
+            </div>
+            <form id="upload-form" class="upload-form">
+              <label class="field"><span>Choose file</span><input id="upload-file" type="file" required /></label>
+              <label class="field grow"><span>Destination path</span><input id="upload-path" type="text" maxlength="4096" placeholder="file name or folder/file.txt" autocomplete="off" /></label>
+              <button id="upload-button" class="secondary" type="submit">Upload</button>
+            </form>
+            <p id="files-message" class="inline-message" role="status" aria-live="polite"></p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Size</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+                <tbody id="file-list"></tbody>
+              </table>
+              <p id="files-empty" class="empty-state hidden">No files yet. Upload one, or create files in the terminal.</p>
+            </div>
+          </div>
+
+          <div id="panel-jobs" class="tool-panel hidden" role="tabpanel" aria-labelledby="tab-jobs">
+            <div class="tool-header">
+              <div><h3>Run a structured job</h3><p class="muted">Arguments are sent as an array directly to the process. Shell command strings are never accepted.</p></div>
+            </div>
+            <form id="job-form" class="job-form">
+              <label class="field field-wide"><span>Arguments · JSON array</span><textarea id="job-argv" rows="3" spellcheck="false" required>["node", "--version"]</textarea><small>Example: ["npm", "test"] — quoting here does not invoke a shell.</small></label>
+              <label class="field"><span>Working directory</span><input id="job-cwd" value="." maxlength="1024" autocomplete="off" required /></label>
+              <label class="field"><span>Timeout · seconds</span><input id="job-timeout" type="number" value="300" min="1" max="7200" step="1" required /></label>
+              <fieldset class="environment-fieldset">
+                <legend>Environment variables</legend>
+                <p class="muted">Allowed names: common build variables, or names beginning APP_, JOB_, or TEST_.</p>
+                <div id="environment-rows" class="environment-rows"></div>
+                <button id="add-environment" class="quiet" type="button">Add variable</button>
+              </fieldset>
+              <button id="start-job" class="primary" type="submit">Start job</button>
+            </form>
+            <p id="jobs-message" class="inline-message" role="status" aria-live="polite"></p>
+            <section id="job-output-wrap" class="job-output-wrap hidden" aria-labelledby="job-output-title">
+              <div class="job-output-heading">
+                <div><h4 id="job-output-title">Job output</h4><span id="job-state" class="status-badge">Queued</span></div>
+                <button id="cancel-job" class="danger-outline" type="button">Cancel job</button>
+              </div>
+              <pre id="job-output" tabindex="0" aria-label="Job logs"></pre>
+            </section>
+          </div>
+
+          <div id="panel-bloom" class="tool-panel hidden" role="tabpanel" aria-labelledby="tab-bloom">
+            <div class="tool-header"><div><h3>Bloom in this workspace</h3><p class="muted">A watch-only identity and read surface. Signing and transactions remain outside the guest.</p></div><button id="refresh-bloom" class="quiet" type="button">Refresh</button></div>
+            <p id="bloom-message" class="inline-message" role="status" aria-live="polite"></p>
+            <div id="bloom-status" class="detail-grid"></div>
+            <aside class="security-note"><strong>No signing authority</strong><p>This workspace never receives your seed phrase, private key, wallet session, or permission to approve transactions.</p></aside>
+          </div>
+
+          <div id="panel-connections" class="tool-panel hidden" role="tabpanel" aria-labelledby="tab-connections">
+            <div class="tool-header"><div><h3>Connect from your device</h3><p class="muted">SSH and NFS appear only when this deployment can issue a short-lived, workspace-scoped connection.</p></div><button id="refresh-connections" class="quiet" type="button">Refresh</button></div>
+            <p id="connections-message" class="inline-message" role="status" aria-live="polite"></p>
+            <div id="connection-list" class="connection-list"></div>
+            <form id="connection-form" class="connection-form hidden">
+              <label class="field field-wide"><span>Ed25519 public key</span><textarea id="connection-public-key" rows="3" maxlength="4096" spellcheck="false" autocomplete="off" placeholder="ssh-ed25519 AAAA…" required></textarea><small>Paste the .pub file only. A private key begins with <code>-----BEGIN OPENSSH PRIVATE KEY-----</code> and must never be pasted here.</small></label>
+              <label class="field"><span>Connection mode</span><select id="connection-mode"><option value="shell">SSH shell</option><option value="nfs">NFS tunnel</option></select></label>
+              <label class="field"><span>Grant lifetime</span><select id="connection-ttl"><option value="900000">15 minutes</option><option value="1800000">30 minutes</option><option value="3600000">1 hour</option></select></label>
+              <button id="issue-connection" class="primary" type="submit">Issue short-lived grant</button>
+            </form>
+            <section id="connection-grant" class="connection-grant hidden" aria-labelledby="connection-grant-title">
+              <div class="job-output-heading"><div><h4 id="connection-grant-title">One-time connection grant</h4><span id="connection-expiry" class="status-badge">Short-lived</span></div><button id="revoke-connection" class="danger-outline" type="button">Revoke now</button></div>
+              <p class="muted">The browser does not retain this grant. Download it now, store the token and certificate in files readable only by you (<code>chmod 600</code>), then delete them when the lease ends.</p>
+              <div class="actions"><button id="download-connection" class="secondary" type="button">Download grant JSON</button><button id="copy-connection-token" class="quiet" type="button">Copy access token</button></div>
+              <div id="connection-details" class="detail-grid"></div>
+              <div id="connection-commands" class="connection-commands"></div>
+            </section>
+            <aside class="security-note"><strong>Your private keys stay on your device</strong><p>Bloom Workspaces accepts only an Ed25519 public key to issue a short-lived certificate. It will never ask you to upload a private key or seed phrase. Browser file transfer remains the universal fallback.</p><button id="open-files-fallback" class="quiet" type="button">Open browser files</button></aside>
+          </div>
+        </section>
       </section>
 
-      <section class="principles">
+      <section class="principles" aria-label="Security principles">
         <article><span>01</span><h3>Actually isolated</h3><p>Public deployments accept only microVM runtimes. A shell never runs in the web control plane.</p></article>
-        <article><span>02</span><h3>Hard expiry</h3><p>The node destroys expired machines even if the browser, database, or network is unavailable.</p></article>
+        <article><span>02</span><h3>Bounded by design</h3><p>Compute expires, uploads and jobs have limits, and package traffic follows an explicit policy.</p></article>
         <article><span>03</span><h3>No signing keys</h3><p>The workspace is untrusted compute. Funded wallets and Bloom’s approval core stay elsewhere.</p></article>
       </section>
     </main>
+
+    <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+      <form method="dialog" class="dialog-card">
+        <p class="eyebrow">Please confirm</p>
+        <h2 id="confirm-title">Delete this file?</h2>
+        <p id="confirm-description" class="muted"></p>
+        <div class="dialog-actions"><button value="cancel" class="secondary">Cancel</button><button id="confirm-action" value="confirm" class="danger">Delete</button></div>
+      </form>
+    </dialog>
+
+    <datalist id="environment-names">
+      <option value="CI"></option><option value="DEBUG"></option><option value="FORCE_COLOR"></option><option value="LANG"></option><option value="LC_ALL"></option><option value="LOG_LEVEL"></option><option value="NODE_ENV"></option><option value="NO_COLOR"></option><option value="PYTHONUNBUFFERED"></option><option value="RUST_BACKTRACE"></option><option value="RUST_LOG"></option><option value="TERM"></option><option value="TZ"></option><option value="APP_"></option><option value="JOB_"></option><option value="TEST_"></option>
+    </datalist>
     <script type="module" src="/main.ts"></script>
   </body>
 </html>

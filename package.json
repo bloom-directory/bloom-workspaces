@@ -27,6 +27,7 @@
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit"
   },
   "dependencies": {
+    "@walletconnect/ethereum-provider": "^2.23.10",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "express": "^5.2.1",
@@ -45,5 +46,8 @@
     "typescript": "^5.9.3",
     "vite": "^8.2.0",
     "vitest": "^4.0.6"
+  },
+  "overrides": {
+    "axios": "1.19.0"
   }
 }

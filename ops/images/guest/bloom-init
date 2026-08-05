@@ -1,21 +1,133 @@
 #!/bin/busybox sh
+set -f
 
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 /bin/busybox --install -s >/dev/null 2>&1 || true
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-mkdir -p /dev/pts /run /tmp /workspace
+mkdir -p /dev/pts /run /run/bloom /tmp /workspace /bloom
 mount -t devpts devpts /dev/pts 2>/dev/null || true
 mount -t tmpfs -o nosuid,nodev tmpfs /run 2>/dev/null || true
 mount -t tmpfs -o nosuid,nodev tmpfs /tmp 2>/dev/null || true
 hostname bloom-workspace
+
+workspace_device="$(/usr/local/sbin/bloom-workspace-device $(cat /proc/cmdline))"
+if [ -n "$workspace_device" ]; then
+  attempt=0
+  while [ ! -b "$workspace_device" ] && [ "$attempt" -lt 50 ]; do
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  if [ ! -b "$workspace_device" ]; then
+    echo "Bloom workspace volume unavailable; powering off." >/dev/ttyS0
+    sync
+    poweroff -f
+    while :; do sleep 60; done
+  fi
+  if ! mount -t ext4 -o rw,nodev,nosuid "$workspace_device" /workspace; then
+    echo "Bloom workspace volume mount failed; powering off." >/dev/ttyS0
+    sync
+    poweroff -f
+    while :; do sleep 60; done
+  fi
+fi
+chown workspace:workspace /workspace 2>/dev/null || true
 chmod 700 /workspace
 
 ip link set lo up 2>/dev/null || true
 if ip link show eth0 >/dev/null 2>&1; then
   ip link set eth0 up
   udhcpc -i eth0 -q -n -t 3 >/dev/null 2>&1 || true
+fi
+
+egress_transport=""
+guest_transport=""
+for argument in $(cat /proc/cmdline); do
+  case "$argument" in
+    bloom_egress=qemu) egress_transport="qemu" ;;
+    bloom_egress=vsock) egress_transport="vsock" ;;
+    bloom_transport=qemu) guest_transport="qemu" ;;
+    bloom_transport=vsock) guest_transport="vsock" ;;
+  esac
+done
+if [ "$egress_transport" = "qemu" ]; then
+  printf '%s\n' \
+    'export HTTP_PROXY=http://10.0.2.100:3128' \
+    'export HTTPS_PROXY=http://10.0.2.100:3128' \
+    'export http_proxy=$HTTP_PROXY' \
+    'export https_proxy=$HTTPS_PROXY' > /run/bloom/egress.env
+elif [ "$egress_transport" = "vsock" ] && [ -c /dev/vsock ]; then
+  /usr/bin/socat TCP4-LISTEN:3128,bind=127.0.0.1,reuseaddr,fork VSOCK-CONNECT:2:3128 &
+  printf '%s\n' \
+    'export HTTP_PROXY=http://127.0.0.1:3128' \
+    'export HTTPS_PROXY=http://127.0.0.1:3128' \
+    'export http_proxy=$HTTP_PROXY' \
+    'export https_proxy=$HTTPS_PROXY' > /run/bloom/egress.env
+fi
+if [ -f /run/bloom/egress.env ]; then
+  chown root:root /run/bloom/egress.env
+  chmod 0444 /run/bloom/egress.env
+fi
+
+workspace_identity="$(/usr/local/sbin/bloom-workspace-identity $(cat /proc/cmdline))"
+if [ -n "$workspace_identity" ]; then
+  if /bin/setpriv \
+    --reuid=1000 --regid=1000 --clear-groups --no-new-privs \
+    --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+    /usr/bin/env -i HOME=/workspace USER=workspace LOGNAME=workspace \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+    /usr/local/sbin/bloom-guest-bootstrap init "$workspace_identity"; then
+    printf '%s\n' "$workspace_identity" > /bloom/identity
+    chown root:root /bloom/identity
+    chmod 0444 /bloom/identity
+  else
+    echo "Bloom watch-only bootstrap failed; Bloom remains unavailable." >/dev/ttyS0
+  fi
+fi
+
+guest_control=/usr/local/libexec/bloom-guest-control
+if [ -x "$guest_control" ]; then
+  if [ "$guest_transport" = "vsock" ] && [ -c /dev/vsock ]; then
+    (
+      [ ! -r /run/bloom/egress.env ] || . /run/bloom/egress.env
+      exec "$guest_control" --workspace /workspace --workspace-quota-bytes 134217728 \
+        --job-uid 1000 --job-gid 1000 --unix-socket /run/bloom/guest-control.sock --vsock-port 5001 \
+        </dev/null >/dev/ttyS0 2>&1
+    ) &
+  elif [ "$guest_transport" = "qemu" ]; then
+    attempt=0
+    control_device=""
+    while [ -z "$control_device" ] && [ "$attempt" -lt 50 ]; do
+      set +f
+      for candidate in /dev/vport*; do
+        port="${candidate##*/}"
+        name_file="/sys/class/virtio-ports/$port/name"
+        if [ -c "$candidate" ] && [ -r "$name_file" ] && [ "$(cat "$name_file")" = "org.bloom.control" ]; then
+          control_device="$candidate"
+          break
+        fi
+      done
+      set -f
+      [ -n "$control_device" ] && break
+      sleep 0.1
+      attempt=$((attempt + 1))
+    done
+    if [ -n "$control_device" ]; then
+      (
+        [ ! -r /run/bloom/egress.env ] || . /run/bloom/egress.env
+        exec "$guest_control" --workspace /workspace --workspace-quota-bytes 134217728 \
+          --job-uid 1000 --job-gid 1000 --unix-socket /run/bloom/guest-control.sock --stdio \
+          <"$control_device" >"$control_device" 2>/dev/ttyS0
+      ) &
+    else
+      "$guest_control" --workspace /workspace --workspace-quota-bytes 134217728 \
+        --job-uid 1000 --job-gid 1000 --unix-socket /run/bloom/guest-control.sock \
+        </dev/null >/dev/ttyS0 2>&1 &
+    fi
+  else
+    echo "Bloom guest transport is unavailable; control service disabled." >/dev/ttyS0
+  fi
 fi
 
 deadline=""
@@ -40,20 +152,30 @@ cat >/dev/ttyS0 <<'BANNER'
 
   Bloom Workspace
   ----------------
-  Disposable root shell. Store only temporary data here.
+  Unprivileged development shell. Check workspace capabilities before relying on persistence.
   Never paste a seed phrase, funded private key, or production token.
 
 BANNER
 
-if [ -x /usr/local/sbin/bloom-vsock-agent ]; then
+if [ "$guest_transport" = "vsock" ] && [ -c /dev/vsock ] && [ -x /usr/local/sbin/bloom-vsock-agent ]; then
   while :; do
     /usr/local/sbin/bloom-vsock-agent
     echo "Bloom guest agent stopped; restarting." >/dev/ttyS0
     sleep 1
   done
 else
+  cd /workspace || {
+    echo "Workspace directory unavailable; powering off." >/dev/ttyS0
+    sync
+    poweroff -f
+    while :; do sleep 60; done
+  }
   while :; do
-    setsid /bin/ash -l </dev/ttyS0 >/dev/ttyS0 2>&1
+    HOME=/workspace USER=workspace LOGNAME=workspace ENV=/etc/ashrc \
+      /usr/bin/setsid /bin/setpriv \
+      --reuid=1000 --regid=1000 --clear-groups --no-new-privs \
+      --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+      /bin/bash -l </dev/ttyS0 >/dev/ttyS0 2>&1
     echo "Shell exited. Press Enter for a new shell." >/dev/ttyS0
     sleep 1
   done

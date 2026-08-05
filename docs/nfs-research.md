@@ -1,46 +1,34 @@
-# NFS research and product decision
+# Native NFS decision and client matrix
 
-Issue [pm#38](https://github.com/bloom-directory/pm/issues/38) asks whether wallet-authenticated users can mount an Internet-hosted NFSv4.1 workspace with no downloaded client.
+Issue [pm#38](https://github.com/bloom-directory/pm/issues/38) asked whether a wallet-authenticated user could mount an Internet-hosted NFS workspace without a custom client. Direct public NFS with Kerberos was rejected as the primary product: its KDC/DNS/port/ticket lifecycle creates substantial onboarding and revocation risk, and Bloom's existing `embednfs` path does not provide RPCSEC_GSS.
 
-## Conclusion
+The implemented design is narrower: Linux NFSD runs inside a QEMU guest, binds only to guest loopback port 2049, and is reachable only through a short-lived NFS-mode SSH certificate carried by the HTTPS WebSocket gateway. No NFS, SSH, mountd, or rpcbind port is public.
 
-`sec=krb5p` is a credible encrypted NFS transport, but it is not the best primary onboarding path. Kerberos issuance, DNS discovery, blocked ports, hard-mount failure behavior, laptop sleep, and revocation semantics create more product risk than value. The workspace service therefore uses HTTPS/WSS in the browser first. Native mounts remain optional research.
+## Security and failure behavior
 
-Most importantly, Bloom's current Rust `embednfs` path recognizes only AUTH_SYS/None and treats RPCSEC_GSS as unknown. It must never be exposed publicly or described as `krb5p`-protected.
+- Only persistent `/workspace` volumes are exportable.
+- The verified custom kernel has NFSD and NFSv4 built in; NFSv2/v3 and pNFS are not offered.
+- The export is NFSv4-only, `all_squash`, UID/GID 1000, synchronous, and rooted at `/workspace`.
+- NFS certificates cannot request a PTY or shell and may forward only to `127.0.0.1:2049`. Shell certificates cannot forward.
+- The agent binds QEMU SSH to host loopback, and every public tunnel is checked against wallet, workspace, mode, token, connection count, and expiry.
+- A hard NFS mount can block callers if the short lease expires or connectivity drops. Clients must unmount before expiry; the browser file API remains the recovery path.
+- Never mount an untrusted tenant workspace on an operator host. The mount is for the authenticated user's own device.
 
-## Comparison
+## Client matrix
 
-| Transport | Zero install | Confidentiality | Revocation | Network reliability | Recommendation |
-|---|---:|---|---|---|---|
-| Browser terminal over WSS/443 | Yes | TLS | Close WSS and destroy VM | Best | Primary |
-| Native SSH | Usually | SSH | Gateway closes sessions; VM expiry | Good | Power-user follow-up |
-| NFS over SSH tunnel | Uses built-in SSH/NFS on macOS | SSH plus optional NFS security | Kill tunnel and VM | Good on 443 | Optional mount experiment |
-| Direct NFSv4.1 `krb5p` | OS-native on macOS | RPC payload privacy/integrity | Ticket expiry is not immediate | Ports 88/2049 often fragile | Research only |
-| Tailscale/WireGuard | Requires install/enrollment | Tunnel encryption | Peer policy | Good | Conflicts with zero-install goal |
-| WebDAV/HTTPS | OS support varies | TLS | HTTP session | Good | File-only fallback candidate |
+| Platform | Decision | Requirements |
+|---|---|---|
+| Linux | Reference implementation | OpenSSH, Node + `ws` proxy helper, NFSv4 client, administrator mount permission |
+| macOS | Implemented, release-gated | Built-in OpenSSH/NFS client, Node helper, admin mount permission, real-device validation on supported macOS versions |
+| Windows | Conditional | Optional OpenSSH and Client for NFS, Node helper, administrator access to bind local port 2049, NFSv4 compatibility probe |
+| Android / iOS | Not offered | Use authenticated browser files and terminal |
 
-## Security facts
+The API returns the certificate, pinned known-hosts entry, bearer lease, gateway path, and capability explanation. Client applications may use `createNfsClientPlan` to obtain argv arrays for the SSH forward, mount, and unmount operations. Values remain argv entries rather than interpolated shell commands.
 
-- RPCSEC_GSS privacy encrypts RPC arguments/results, while enough RPC header information for routing remains visible. See [RFC 2203](https://www.rfc-editor.org/rfc/rfc2203).
-- A Kerberos service can validate an already-issued ticket without consulting the KDC. Disabling a principal therefore does not instantly revoke every ticket; the data plane must enforce the hard lease. See [RFC 4120](https://www.rfc-editor.org/rfc/rfc4120).
-- Apple's current NFS sources contain NFSv4.1, `sec=krb5p`, custom port, mount ownership, and non-reserved-port support. `resvport` is the root-requiring option, so a user-owned mountpoint may support a non-root flow. See [Apple NFS](https://github.com/apple-oss-distributions/NFS).
-- Hard NFS mounts can block applications during network loss. A public onboarding product should not make this failure mode its only interface.
+## Reproducible kernel gate
 
-## macOS experiment, not production instructions
+`ops/connections/build-nfs-kernel.sh` pins Linux 6.1.155 and the Firecracker 1.16.1 reference config by SHA-256, applies the reviewed NFSD fragment, and emits the kernel, final config, and `SHA256SUMS`. `build-nfs-kernel-container.sh` runs that build in a digest-pinned disposable environment.
 
-On an isolated test realm and disposable workspace, the intended direct test remains:
+At agent startup, `BLOOM_NFS_ENABLED=1` also requires `BLOOM_NFS_KERNEL_CONFIG`. The agent reads the selected kernel, config, and adjacent manifest, verifies both digests and every required NFSD setting, and refuses to advertise NFS on any mismatch.
 
-```bash
-kinit temporary-user@REALM.EXAMPLE
-mkdir -p "$HOME/RemoteWorkspace"
-mount -t nfs -o vers=4.1,sec=krb5p,soft,intr,deadtimeout=30 \
-  files.example.com:/workspace "$HOME/RemoteWorkspace"
-```
-
-This requires a real NFSv4.1 server that disables AUTH_SYS, a KDC, an `nfs/<hostname>` service principal, correct DNS/time, and client-matrix validation. It is intentionally not wired to the public workspace deployment.
-
-For an SSH-tunnel test, bind NFS only inside the workspace/private node network and forward a high local port over a short-lived SSH certificate. The exact macOS `mount_nfs` custom-port behavior must be tested across Tahoe patch releases before it is offered in UI.
-
-## Success criteria status
-
-The implemented browser product satisfies wallet login, short-lived isolated workspace access, confidentiality over HTTPS/WSS, hard expiry, reconnect, and no persistent client modification. Direct native mount, Kerberos credential UX, non-admin Tahoe behavior, and hostile-network behavior remain explicit empirical experiments. A failure in those experiments does not remove the working product.
+Direct NFSv4.1/`krb5p`, non-admin macOS mounting, laptop sleep behavior, and Windows compatibility remain separate experiments. None is required for the browser product or used to overstate its portability.

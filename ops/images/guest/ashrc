@@ -1,2 +1,3 @@
-export PS1='\[\033[38;5;114m\]bloom\[\033[0m\]:\w# '
+export PS1='\[\033[38;5;114m\]bloom\[\033[0m\]:\w$ '
+[ ! -r /run/bloom/egress.env ] || . /run/bloom/egress.env
 umask 077

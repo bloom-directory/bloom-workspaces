@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Bloom Workspaces">
+  <rect width="128" height="128" rx="28" fill="#080b0a"/>
+  <circle cx="64" cy="64" r="43" fill="none" stroke="#a8f0b5" stroke-width="5"/>
+  <path fill="#a8f0b5" d="M45 35h22c14 0 23 7 23 18 0 7-4 13-11 16 9 3 14 10 14 19 0 14-10 22-27 22H45V35Zm20 30c10 0 15-4 15-11 0-6-5-10-14-10H56v21h9Zm1 36c11 0 17-5 17-13 0-9-6-14-18-14h-9v27h10Z"/>
+</svg>

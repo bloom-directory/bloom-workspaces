@@ -1,0 +1,24 @@
+# sshd is not started by the base image. Runtime integration must install an
+# ephemeral, workspace-scoped key at this path before starting it.
+Port 22
+AddressFamily any
+ListenAddress 0.0.0.0
+ListenAddress ::
+HostKey /run/bloom/ssh_host_ed25519_key
+AuthorizedKeysFile /run/bloom/authorized_keys
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+AllowUsers workspace
+AllowAgentForwarding no
+AllowTcpForwarding no
+GatewayPorts no
+PermitTunnel no
+X11Forwarding no
+PermitUserEnvironment no
+UsePAM no
+StrictModes yes
+Subsystem sftp internal-sftp

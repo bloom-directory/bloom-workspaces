@@ -1,86 +1,87 @@
 # Bloom Workspaces
 
-Bloom Workspaces is a public-signup prototype for disposable, wallet-authenticated Linux machines. A user signs an [ERC-4361 SIWE](https://eips.ethereum.org/EIPS/eip-4361) message in the browser and receives a short-lived shell without installing a Bloom binary.
+Bloom Workspaces is a public-signup prototype for short-lived, wallet-authenticated Linux development machines. A user signs an [ERC-4361 SIWE](https://eips.ethereum.org/EIPS/eip-4361) message and gets a real, unprivileged shell inside a dedicated KVM VM—without being placed on an operator-maintained allowlist.
 
-This repository implements a real end-to-end example:
+This repository now includes a working vertical slice for:
 
-- injected-wallet SIWE login with audience, expiry, network binding, and replay protection;
-- public admission with Turnstile, rolling wallet/IP limits, global capacity, and a FIFO queue;
-- one KVM microVM per workspace through QEMU or Firecracker;
-- a browser terminal over HTTPS/WebSocket;
-- Firecracker terminal transport over AF_VSOCK, without relying on a production serial-console contract;
-- independent node-agent lease enforcement and VM destruction;
-- reconnectable guest PTYs with bounded output history;
-- strict startup guards that reject unsafe public configurations.
+- injected-wallet and WalletConnect/Reown mobile SIWE;
+- QEMU and jailed Firecracker VM isolation with hard lease expiry;
+- a curated Alpine image containing Git, compilers, Node, Python, editors, SSH, NFS tools, and a verified static Bloom CLI;
+- policy-controlled HTTP/HTTPS package egress with hostname, DNS, SNI, address, byte, connection, and time limits;
+- browser terminal, authenticated file upload/download, persistent wallet-owned volumes, and structured job APIs with streamed logs and cancellation;
+- watch-only Bloom identity and VFS access, with no signer or transaction capability in the guest;
+- short-lived, owner-scoped SSH certificates over a private WebSocket gateway;
+- optional NFSv4 over an NFS-only SSH tunnel, backed by a verified NFSD-enabled QEMU kernel.
 
-The original research prompt is [bloom-directory/pm#38](https://github.com/bloom-directory/pm/issues/38). The implementation deliberately makes browser/HTTPS the reliable default. Native NFS is an optional experiment, not the security or onboarding foundation.
+The original product prompt is [bloom-directory/pm#38](https://github.com/bloom-directory/pm/issues/38).
 
-## Public, without an allowlist
+## What works on each client
 
-The product does not require an allowlist. Anyone can sign in and request compute, subject to automatic controls:
+| Client | Browser terminal/files/jobs | Wallet sign-in | Native SSH | Native NFS |
+|---|---|---|---|---|
+| Linux | Yes | Browser wallet or WalletConnect | Yes, OpenSSH + Node proxy helper | Yes, admin mount required |
+| macOS | Yes | Browser wallet or WalletConnect | Yes, OpenSSH + Node proxy helper | Implemented; real-device validation remains a release gate |
+| Windows | Yes | Browser wallet or WalletConnect | Conditional on optional OpenSSH + Node | Conditional on Client for NFS, admin, and compatibility probe |
+| Android / iOS | Yes | WalletConnect deep-link/QR flow | Browser-terminal fallback | Browser-files fallback |
 
-- one active workspace per wallet;
-- configurable concurrent and rolling 24-hour limits per wallet and IP;
-- a hard global running-VM ceiling and bounded FIFO queue;
-- Cloudflare Turnstile in public mode;
-- fixed VM CPU, memory, disk, and lease limits;
-- no guest Internet access in the initial public profile.
+Browser access is the reliable zero-install product. Desktop SSH/NFS are power-user paths and never expose guest ports publicly.
 
-Wallets are cheap identities, so wallet authentication alone is not an abuse defense. These controls bound cost even under Sybil traffic. Billing or stronger proof-of-personhood can be added later without changing the workspace boundary.
+## Build and run
 
-## Run the working example
-
-Requirements: Linux, Node 22+, KVM access, `qemu-system-x86_64`, a C compiler, and `mkfs.ext4`.
+Requirements: Linux, Node 22+, KVM, QEMU, Docker for the reproducible builders, and enough space for a 4 GiB sparse guest image.
 
 ```bash
-npm install
-ops/images/build-demo-image.sh
+npm ci
+ops/bloom/build-musl.sh
+sudo ops/images/build-demo-image.sh
 npm run dev:vm
 ```
 
-Open <http://127.0.0.1:8787>, choose **Local demo sign-in**, and create a workspace. `npm run dev:firecracker` runs the same flow on Firecracker. The image script downloads only pinned artifacts and verifies their SHA-256 digests.
+Open <http://127.0.0.1:8787>, use **Local demo sign-in**, and create a workspace. `npm run dev` is a non-isolated host-process UI development mode and is rejected in public mode.
 
-`npm run dev` uses a host process for quick UI development. It is not isolation, is prominently labeled as development-only, and the server refuses to use it when `BLOOM_PUBLIC_MODE=1`.
+For optional native NFS, build and select the pinned NFSD kernel:
 
-Run the automated and live checks with:
+```bash
+ops/connections/build-nfs-kernel-container.sh
+export BLOOM_VM_KERNEL="$PWD/artifacts/nfs-kernel/vmlinux-6.1.155-nfsd"
+export BLOOM_NFS_KERNEL_CONFIG="$PWD/artifacts/nfs-kernel/vmlinux-6.1.155-nfsd.config"
+export BLOOM_SSH_ENABLED=1
+export BLOOM_SSH_CA_KEY=/absolute/private/path/workspace_ca
+export BLOOM_NFS_ENABLED=1
+```
+
+Generate the SSH user CA outside the repository with `ssh-keygen -t ed25519 -f /absolute/private/path/workspace_ca`. The private key must be owned by the agent user and mode 0600; the sibling `.pub` file is the only CA material sent into guests.
+
+Enable curated package access with `BLOOM_VM_EGRESS=controlled`. The default policy permits the public npm and PyPI hosts listed in `.env.example`; raw Internet mode is rejected in public deployments.
+
+## Product and security boundaries
+
+- The workspace shell can run arbitrary commands as UID/GID 1000 inside its own VM. It is not guest root and receives no host, wallet, or platform secret.
+- Persistent storage is a separate quota-bounded ext4 volume keyed to the authenticated wallet. Stopping a VM retains it; the explicit destroy API removes it. Jailed Firecracker currently reports persistence unsupported; QEMU is the complete reference path.
+- `/bloom` is watch-only. The guest can read its wallet-scoped Bloom VFS through `bloom vfs` and `bloom-workspace`, but cannot sign, approve, or submit transactions.
+- Controlled egress is HTTP/HTTPS package access, not general networking. Private, loopback, link-local, metadata, multicast, reserved, and non-allowlisted destinations are blocked; TLS SNI must match the requested host.
+- SSH grants accept only a user public key, last at most the remaining workspace lease, pin an ephemeral guest host key, and are revoked when the workspace stops. The user's private key never leaves their device.
+- NFS listens only on guest loopback and is reachable solely through an NFS-mode certificate that cannot open a shell or PTY. All NFS identities are squashed to the workspace user.
+- The operator remains trusted for compute confidentiality. Do not place seed phrases, funded private keys, production credentials, or Bloom signing/approval services in a workspace.
+
+Public access is bounded with Turnstile, wallet/IP rolling limits, one active workspace per wallet, fixed VM resources, a bounded FIFO queue, and hard node-agent expiry. Wallet identity is not proof of personhood, so capacity and spend limits remain essential.
+
+## Verification
 
 ```bash
 npm run check
 npm run build
-npm run smoke:live   # while a local workspace is running
+npm run smoke:live
 ```
 
-## Architecture
-
-```mermaid
-flowchart LR
-  Wallet[Wallet] -->|SIWE| Browser[Browser UI]
-  Browser -->|HTTPS / WSS| Control[Unprivileged control plane]
-  Control -->|private Unix socket + bearer| Agent[Node agent]
-  Agent -->|KVM| VM[One microVM per tenant]
-  Browser -. optional later .-> Native[SSH / NFS-over-SSH]
-  VM -.- NoSecrets[No wallet keys or Bloom signing core]
-```
-
-The control plane has no KVM access. The node agent has no wallet or application signing secrets. In production, systemd places both in separate Unix users and keeps all VM children in the agent cgroup so an agent crash kills its machines.
-
-Read [Architecture](docs/architecture.md), [Threat model](docs/threat-model.md), and [Public launch](docs/public-launch.md) before exposing a deployment.
-
-## What this is—and is not
-
-This is suitable for a capped public pilot, onboarding experience, and live isolation demonstration after the launch checklist is completed on a dedicated host.
-
-It is not yet a production financial environment. Never put seed phrases, funded private keys, platform credentials, or Bloom’s signing/approval core inside a workspace. The operator is trusted for compute confidentiality. A future Bloom integration should start watch-only or on testnet and use an independently authenticated approval service outside the VM.
-
-Native Internet-facing NFS is not enabled. The compatibility and security findings are in [NFS research](docs/nfs-research.md); macOS validation remains an empirical device/network test, not an architectural dependency.
+The image and kernel builders pin upstream inputs, verify SHA-256 digests, and emit provenance/checksum manifests. Read [Architecture](docs/architecture.md), [Threat model](docs/threat-model.md), [Private connections](ops/connections/README.md), and [Public launch](docs/public-launch.md) before exposing a deployment.
 
 ## Repository map
 
-- `web/` — wallet login, queue state, and xterm browser terminal.
-- `src/control/` — sessions, SIWE, admission, lifecycle, and WebSocket proxy.
-- `src/agent/` — private node API, hard expiry, QEMU, Firecracker, and vsock transport.
-- `ops/images/` — reproducible Alpine demo image and static guest agent.
-- `ops/systemd/` — separate unprivileged QEMU and root/jailer Firecracker service boundaries.
-- `docs/` — architecture, threat model, NFS findings, testing, and launch gates.
+- `web/` — SIWE/WalletConnect UI, terminal, files, jobs, Bloom, and connection grants.
+- `src/control/` — public auth, admission, lifecycle, APIs, and WebSocket relays.
+- `src/agent/` — private node API, VM lifecycle, egress, volumes, guest control, and SSH leases.
+- `src/jobs/`, `src/ssh/`, `src/nfs/` — bounded execution and private connection policies.
+- `ops/images/`, `ops/bloom/`, `ops/guest-control/`, `ops/connections/` — reproducible guest/runtime artifacts.
 
 MIT. Experimental software; no warranty.

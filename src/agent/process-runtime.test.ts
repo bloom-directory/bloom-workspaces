@@ -10,7 +10,7 @@ describe("node-agent lease enforcement", () => {
     const directory = await mkdtemp(join(tmpdir(), "bloom-runtime-"));
     const runtime = new ProcessRuntime(directory);
     const id = randomUUID();
-    await runtime.create({ id, leaseExpiresAt: Date.now() + 30 });
+    await runtime.create({ id, leaseExpiresAt: Date.now() + 30, storage: { mode: "disposable", quotaBytes: 1024 * 1024 } });
     let output = "";
     runtime.attach(id, (message) => { if (message.type === "output") output += message.data; });
     runtime.write(id, "printf bloom-runtime-ok\\n");

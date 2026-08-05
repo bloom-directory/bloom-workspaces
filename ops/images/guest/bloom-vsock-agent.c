@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <poll.h>
+#include <grp.h>
 #include <pty.h>
 #include <signal.h>
 #include <stdint.h>
@@ -62,7 +63,11 @@ static int start_shell(int *master) {
     setenv("HOME", "/workspace", 1);
     setenv("ENV", "/etc/ashrc", 1);
     setenv("TERM", "xterm-256color", 1);
-    execl("/bin/ash", "ash", "-l", NULL);
+    setenv("USER", "workspace", 1);
+    setenv("LOGNAME", "workspace", 1);
+    if (setgroups(0, NULL) < 0) _exit(126);
+    if (setgid(1000) < 0 || setuid(1000) < 0) _exit(126);
+    execl("/bin/bash", "bash", "-l", NULL);
     _exit(127);
   }
   return child;
@@ -76,7 +81,7 @@ int main(void) {
   pid_t shell = start_shell(&master);
   if (shell < 0) { perror("forkpty"); return 1; }
   int client = -1;
-  const char banner[] = "\r\nBloom vsock terminal ready. This VM is disposable; do not enter secrets.\r\n";
+  const char banner[] = "\r\nBloom vsock terminal ready. Check persistence capabilities; do not enter secrets.\r\n";
   remember(banner, sizeof(banner) - 1);
 
   for (;;) {

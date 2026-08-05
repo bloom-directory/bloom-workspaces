@@ -5,7 +5,13 @@ import { access, chown, copyFile, mkdir, rm, writeFile } from "node:fs/promises"
 import { connect, type Socket } from "node:net";
 import { join } from "node:path";
 import type { Config } from "../config.js";
-import type { RuntimeSpec, RuntimeState, TerminalMessage, WorkspaceRuntime } from "./runtime.js";
+import { destroyVolumeDirectory, ensureExt4Volume, volumeDirectory } from "./data-volume.js";
+import { startFirecrackerWorkspaceEgress, type WorkspaceEgress } from "./egress-session.js";
+import { requestGuest } from "./guest-channel.js";
+import { GuestWorkspace } from "./guest-workspace.js";
+import { waitForGuestControl } from "./guest-ready.js";
+import type { GuestRequest } from "../guest-protocol.js";
+import { RuntimeDataError, type RuntimeSpec, type RuntimeState, type TerminalMessage, type WorkspaceFileEntry, type WorkspaceFileWrite, type WorkspaceRuntime } from "./runtime.js";
 
 type PreparedVm = { file: string; args: string[]; cwd: string; vsockPath: string; cleanup: () => Promise<void> };
 type Instance = {
@@ -27,6 +33,7 @@ const MAX_HISTORY = 256 * 1024;
 export class FirecrackerRuntime implements WorkspaceRuntime {
   private readonly instances = new Map<string, Instance>();
   private readonly allocatedUids = new Set<number>();
+  private readonly storage = new Map<string, RuntimeSpec["storage"]>();
 
   constructor(private readonly config: Config) {}
 
@@ -34,7 +41,11 @@ export class FirecrackerRuntime implements WorkspaceRuntime {
     if (!ID.test(spec.id)) throw new Error("Invalid workspace id");
     if (spec.leaseExpiresAt <= Date.now()) throw new Error("Lease is already expired");
     if (this.instances.has(spec.id)) return;
-    const prepared = await this.prepare(spec);
+    validateStorage(this.config, spec);
+    this.storage.set(spec.id, spec.storage);
+    let prepared: PreparedVm;
+    try { prepared = await this.prepare(spec); }
+    catch (error) { this.storage.delete(spec.id); throw error; }
     const events = new EventEmitter();
     const child = spawn(prepared.file, prepared.args, { cwd: prepared.cwd, stdio: ["ignore", "pipe", "pipe"] });
     const instance: Instance = {
@@ -58,6 +69,12 @@ export class FirecrackerRuntime implements WorkspaceRuntime {
       void instance.cleanup();
       this.forgetLater(spec.id, instance);
     });
+    try { await waitForGuestControl((request, timeout) => this.guestRequest(spec.id, request, timeout)); }
+    catch (error) {
+      await this.stop(spec.id, "guest control failed readiness");
+      this.storage.delete(spec.id);
+      throw error;
+    }
   }
 
   status(id: string): RuntimeState { return this.instances.get(id)?.state ?? "missing"; }
@@ -86,6 +103,33 @@ export class FirecrackerRuntime implements WorkspaceRuntime {
   resize(_id: string, _cols: number, _rows: number) {
     // The minimal raw-vsock protocol deliberately omits resize. The guest PTY defaults to 100x30.
   }
+
+  dataCapabilities(_id: string) {
+    return {
+      persistence: !this.config.firecrackerJailed,
+      ...(this.config.firecrackerJailed ? { persistenceReason: "Persistent data disks are unsupported with the Firecracker jailer" } : {}),
+      fileTransfer: true,
+    };
+  }
+
+  async listFiles(id: string, path: string): Promise<WorkspaceFileEntry[]> { return this.guestFiles(id).list(path); }
+  async readFile(id: string, path: string): Promise<Buffer> { return this.guestFiles(id).read(path); }
+  async writeFile(id: string, path: string, contents: Buffer): Promise<WorkspaceFileWrite> { return this.guestFiles(id).write(path, contents); }
+  async deleteFile(id: string, path: string): Promise<{ usedBytes: number; quotaBytes: number }> { return this.guestFiles(id).delete(path); }
+
+  guestRequest(id: string, request: GuestRequest, timeoutMs?: number) {
+    if (this.status(id) !== "running") throw new RuntimeDataError("Workspace is not running", 409);
+    return requestGuest({ kind: "firecracker-vsock", path: this.vsockPath(id), port: 5001 }, request, timeoutMs);
+  }
+
+  async destroyVolume(volumeId: string) {
+    for (const [id, storage] of this.storage) {
+      if (storage.volumeId === volumeId && this.status(id) === "running") throw new RuntimeDataError("Volume is attached to a running workspace", 409);
+    }
+    await destroyVolumeDirectory(this.config.dataDir, volumeId);
+  }
+
+  private guestFiles(id: string) { return new GuestWorkspace((request, timeout) => this.guestRequest(id, request, timeout)); }
 
   async stop(id: string, reason: string) {
     const instance = this.instances.get(id);
@@ -184,13 +228,25 @@ export class FirecrackerRuntime implements WorkspaceRuntime {
     const configPath = join(workspaceDir, "firecracker.json");
     const vsockPath = this.vsockPath(spec.id);
     await copyFile(this.config.vmRootfs, rootfs, constants.COPYFILE_FICLONE);
-    await writeFile(configPath, JSON.stringify(vmConfig(this.config, spec, this.config.vmKernel, rootfs, vsockPath)), { mode: 0o600 });
+    const workspaceDisk = spec.storage.mode === "persistent"
+      ? await ensureExt4Volume(this.config.dataDir, spec.storage.volumeId!, spec.storage.quotaBytes)
+      : undefined;
+    const egress = await startFirecrackerWorkspaceEgress(this.config, spec.id, vsockPath);
+    try {
+      await writeFile(configPath, JSON.stringify(vmConfig(this.config, spec, this.config.vmKernel, rootfs, vsockPath, workspaceDisk, egress)), { mode: 0o600 });
+    } catch (error) {
+      await egress?.close();
+      throw error;
+    }
     return {
       file: this.config.firecrackerBin,
       args: ["--api-sock", apiSocket, "--config-file", configPath],
       cwd: workspaceDir,
       vsockPath,
-      cleanup: async () => { await Promise.all([rm(workspaceDir, { recursive: true, force: true }), rm(socketDir, { recursive: true, force: true })]); },
+      cleanup: async () => {
+        await egress?.close();
+        await Promise.all([rm(workspaceDir, { recursive: true, force: true }), rm(socketDir, { recursive: true, force: true })]);
+      },
     };
   }
 
@@ -208,14 +264,22 @@ export class FirecrackerRuntime implements WorkspaceRuntime {
     const kernel = join(root, "vmlinux");
     const configPath = join(root, "firecracker.json");
     await Promise.all([copyFile(this.config.vmRootfs, rootfs, constants.COPYFILE_FICLONE), copyFile(this.config.vmKernel, kernel, constants.COPYFILE_FICLONE)]);
-    await writeFile(configPath, JSON.stringify(vmConfig(this.config, spec, "/vmlinux", "/rootfs.ext4", "/run/vsock.sock")), { mode: 0o600 });
-    await Promise.all([chown(root, uid, uid), chown(run, uid, uid), chown(rootfs, uid, uid), chown(kernel, uid, uid), chown(configPath, uid, uid)]);
+    await Promise.all([chown(root, uid, uid), chown(run, uid, uid), chown(rootfs, uid, uid), chown(kernel, uid, uid)]);
+    const egress = await startFirecrackerWorkspaceEgress(this.config, spec.id, this.vsockPath(spec.id));
+    try {
+      await writeFile(configPath, JSON.stringify(vmConfig(this.config, spec, "/vmlinux", "/rootfs.ext4", "/run/vsock.sock", undefined, egress)), { mode: 0o600 });
+      await chown(configPath, uid, uid);
+    } catch (error) {
+      await egress?.close();
+      throw error;
+    }
     return {
       file: this.config.firecrackerJailerBin,
       args: ["--id", spec.id, "--exec-file", this.config.firecrackerBin, "--uid", String(uid), "--gid", String(uid), "--chroot-base-dir", this.config.jailerChrootBase, "--new-pid-ns", "--", "--api-sock", "/run/firecracker.sock", "--config-file", "/firecracker.json"],
       cwd: workspaceDir,
       vsockPath: this.vsockPath(spec.id),
       cleanup: async () => {
+        await egress?.close();
         this.allocatedUids.delete(uid);
         await Promise.all([rm(workspaceDir, { recursive: true, force: true }), rm(jail, { recursive: true, force: true })]);
       },
@@ -223,14 +287,25 @@ export class FirecrackerRuntime implements WorkspaceRuntime {
   }
 }
 
-function vmConfig(config: Config, spec: RuntimeSpec, kernel: string, rootfs: string, vsockPath: string) {
+function vmConfig(config: Config, spec: RuntimeSpec, kernel: string, rootfs: string, vsockPath: string, workspaceDisk?: string, egress?: WorkspaceEgress) {
   const deadline = Math.floor(spec.leaseExpiresAt / 1000);
   return {
-    "boot-source": { kernel_image_path: kernel, boot_args: `console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/local/sbin/bloom-init bloom_deadline=${deadline}` },
-    drives: [{ drive_id: "rootfs", path_on_host: rootfs, is_root_device: true, is_read_only: false }],
+    "boot-source": { kernel_image_path: kernel, boot_args: `console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/local/sbin/bloom-init bloom_transport=vsock bloom_deadline=${deadline}${workspaceDisk ? " bloom_workspace=/dev/vdb" : ""}${egress ? ` ${egress.kernelArgument}` : ""}${spec.identity ? ` bloom_identity=${spec.identity.walletAddress}` : ""}` },
+    drives: [
+      { drive_id: "rootfs", path_on_host: rootfs, is_root_device: true, is_read_only: false },
+      ...(workspaceDisk ? [{ drive_id: "workspace", path_on_host: workspaceDisk, is_root_device: false, is_read_only: false }] : []),
+    ],
     vsock: { guest_cid: 3, uds_path: vsockPath },
     "machine-config": { vcpu_count: config.vmVcpus, mem_size_mib: config.vmMemoryMib, smt: false },
   };
 }
 
 function lastLine(value: string) { return value.trim().split("\n").at(-1)?.slice(0, 500) ?? ""; }
+
+function validateStorage(config: Config, spec: RuntimeSpec) {
+  if (spec.storage.mode === "persistent") {
+    volumeDirectory(config.dataDir, spec.storage.volumeId ?? "");
+    if (config.firecrackerJailed) throw new RuntimeDataError("Persistent data disks are unsupported with the Firecracker jailer", 501);
+  }
+  else if (spec.storage.volumeId !== undefined) throw new RuntimeDataError("Disposable storage cannot name a persistent volume", 400);
+}

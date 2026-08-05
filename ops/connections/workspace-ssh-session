@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+# sshd runs this only after certificate authentication. Remote one-shot
+# commands are intentionally rejected; structured automation belongs to the
+# bounded jobs API, while this path provides an interactive workspace shell.
+if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+  printf '%s\n' 'Remote SSH commands are disabled; use an interactive shell or the jobs API.' >&2
+  exit 64
+fi
+
+cd /workspace
+export HOME=/workspace USER=workspace LOGNAME=workspace
+exec /bin/bash -l

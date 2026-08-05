@@ -32,13 +32,19 @@ export abstract class PtyRuntime implements WorkspaceRuntime {
     await mkdir(workspaceDir, { recursive: true, mode: 0o700 });
     const command = await this.command(spec, workspaceDir);
     const events = new EventEmitter();
-    const child = pty.spawn(command.file, command.args, {
-      name: "xterm-256color",
-      cols: 100,
-      rows: 30,
-      cwd: command.cwd,
-      env: command.env ?? minimalEnvironment(),
-    });
+    let child: pty.IPty;
+    try {
+      child = pty.spawn(command.file, command.args, {
+        name: "xterm-256color",
+        cols: 100,
+        rows: 30,
+        cwd: command.cwd,
+        env: command.env ?? minimalEnvironment(),
+      });
+    } catch (error) {
+      await command.cleanup?.();
+      throw error;
+    }
     const instance: Instance = { process: child, leaseExpiresAt: spec.leaseExpiresAt, state: "running", events, history: "", ...(command.cleanup ? { cleanup: command.cleanup } : {}) };
     this.instances.set(spec.id, instance);
     child.onData((data) => {
