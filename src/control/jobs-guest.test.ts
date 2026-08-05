@@ -186,6 +186,86 @@ describe("guest job, file, and Bloom control service", () => {
     expect(cancelled.status, cancelled.stderr).toBe(0);
     expect(await harness.waitForTerminal(jobId)).toMatchObject({ state: "cancelled" });
   });
+
+  it("relays signing requests through the full request-pending-resolve lifecycle", async () => {
+    const harness = await GuestHarness.create();
+
+    // Request a personal_sign
+    const req = await harness.request({ operation: "signing.request", method: "personal_sign", params: ["0x48656c6c6f", "0x1111111111111111111111111111111111111111"] });
+    expect(req.ok).toBe(true);
+    const requestId = (req.result as { requestId: string }).requestId;
+    expect(requestId).toMatch(/^sig_/);
+
+    // Status should show pending
+    const status = await harness.request({ operation: "signing.status", requestId });
+    expect(status).toMatchObject({ ok: true, result: { status: "pending" } });
+
+    // Pending list should contain it
+    const pending = await harness.request({ operation: "signing.pending" });
+    expect(pending).toMatchObject({ ok: true });
+    const pendingReqs = (pending.result as { requests: { requestId: string; method: string }[] }).requests;
+    expect(pendingReqs).toEqual(expect.arrayContaining([expect.objectContaining({ requestId, method: "personal_sign" })]));
+
+    // Resolve with a result
+    const resolved = await harness.request({ operation: "signing.resolve", requestId, result: "0xdeadbeef" });
+    expect(resolved).toMatchObject({ ok: true, result: {} });
+
+    // Status should now show resolved
+    const finalStatus = await harness.request({ operation: "signing.status", requestId });
+    expect(finalStatus).toMatchObject({ ok: true, result: { status: "resolved", result: "0xdeadbeef" } });
+
+    // Pending should no longer contain it
+    const pendingAfter = await harness.request({ operation: "signing.pending" });
+    const pendingReqsAfter = (pendingAfter.result as { requests: { requestId: string }[] }).requests;
+    expect(pendingReqsAfter.find((r) => r.requestId === requestId)).toBeUndefined();
+  });
+
+  it("rejects unsupported signing methods and enforces param limits", async () => {
+    const harness = await GuestHarness.create();
+
+    expect(await harness.request({ operation: "signing.request", method: "eth_sign", params: ["0x1"] }))
+      .toMatchObject({ ok: false, error: { code: "invalid_request" } });
+
+    expect(await harness.request({ operation: "signing.request", method: "personal_sign", params: "not-an-array" }))
+      .toMatchObject({ ok: false, error: { code: "invalid_request" } });
+
+    const oversizedParams = Array.from({ length: 10 }, (_, i) => `0x${i}`);
+    expect(await harness.request({ operation: "signing.request", method: "personal_sign", params: oversizedParams }))
+      .toMatchObject({ ok: false, error: { code: "invalid_request" } });
+  });
+
+  it("prevents resolving a signing request twice", async () => {
+    const harness = await GuestHarness.create();
+
+    const req = await harness.request({ operation: "signing.request", method: "personal_sign", params: ["0x48656c6c6f", "0x1111111111111111111111111111111111111111"] });
+    const requestId = (req.result as { requestId: string }).requestId;
+
+    const first = await harness.request({ operation: "signing.resolve", requestId, result: "0xabc" });
+    expect(first.ok).toBe(true);
+
+    const second = await harness.request({ operation: "signing.resolve", requestId, result: "0xdef" });
+    expect(second).toMatchObject({ ok: false, error: { code: "not_found" } });
+  });
+
+  it("allows rejecting a signing request with an error", async () => {
+    const harness = await GuestHarness.create();
+
+    const req = await harness.request({ operation: "signing.request", method: "personal_sign", params: ["0x48656c6c6f", "0x1111111111111111111111111111111111111111"] });
+    const requestId = (req.result as { requestId: string }).requestId;
+
+    const rejected = await harness.request({ operation: "signing.resolve", requestId, error: "user rejected" });
+    expect(rejected).toMatchObject({ ok: true, result: {} });
+
+    const status = await harness.request({ operation: "signing.status", requestId });
+    expect(status).toMatchObject({ ok: true, result: { status: "rejected", error: "user rejected" } });
+  });
+
+  it("returns not_found for unknown signing request IDs", async () => {
+    const harness = await GuestHarness.create();
+
+    expect(await harness.request({ operation: "signing.status", requestId: "sig_nonexistent" }))
+      .toMatchObject({ ok: false, error: { code: "not_found" } });
+  });
 });
 
 type RequestFields = { operation: string } & Record<string, unknown>;

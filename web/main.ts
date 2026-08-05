@@ -528,6 +528,30 @@ function closeSigningPoll() {
   signingPollTimer = undefined;
 }
 
+function formatSigningRequest(method: string, params: unknown[]): string {
+  if (method === "personal_sign") {
+    const message = String(params[0] ?? "");
+    const address = String(params[1] ?? "");
+    return `Method: personal_sign\nFrom: ${address}\nMessage:\n${message}`;
+  }
+  if (method === "eth_sendTransaction") {
+    const tx = (params[0] ?? {}) as Record<string, unknown>;
+    const from = String(tx.from ?? "?");
+    const to = String(tx.to ?? "?");
+    const value = String(tx.value ?? "0x0");
+    const data = String(tx.data ?? "0x");
+    const lines = [`Method: eth_sendTransaction`, `From: ${from}`, `To: ${to}`, `Value: ${value} wei`];
+    if (data !== "0x" && data.length > 10) lines.push(`Data: ${data.slice(0, 100)}${data.length > 100 ? "…" : ""}`);
+    return lines.join("\n");
+  }
+  if (method === "eth_signTypedData_v4") {
+    const address = String(params[0] ?? "");
+    const typed = params[1];
+    return `Method: eth_signTypedData_v4\nFrom: ${address}\nTyped data:\n${typeof typed === "string" ? typed.slice(0, 500) : JSON.stringify(typed, null, 2).slice(0, 500)}`;
+  }
+  return `Method: ${method}\nParams: ${JSON.stringify(params).slice(0, 500)}`;
+}
+
 function startSigningPoll(workspaceId: string) {
   closeSigningPoll();
   const seen = new Set<string>();
@@ -538,14 +562,32 @@ function startSigningPoll(workspaceId: string) {
       for (const request of result.requests) {
         if (seen.has(request.requestId)) continue;
         seen.add(request.requestId);
-        void resolveSigningRequest(workspaceId, request);
+        void promptAndResolveSigningRequest(workspaceId, request);
       }
+      if (seen.size > 50) { const keep = new Set(result.requests.map((r) => r.requestId)); for (const id of seen) if (!keep.has(id)) seen.delete(id); }
     } catch { /* workspace may have stopped */ }
   }, 3_000);
 }
 
-async function resolveSigningRequest(workspaceId: string, request: { requestId: string; method: string; params: unknown[] }) {
+async function promptAndResolveSigningRequest(workspaceId: string, request: { requestId: string; method: string; params: unknown[] }) {
   if (!walletBinding) return;
+  const dialog = $("signing-dialog") as HTMLDialogElement;
+  const description = $("signing-description");
+  const detail = $("signing-detail");
+  description.textContent = `Your workspace is requesting a wallet signature. Review the details below, then approve or reject.`;
+  detail.textContent = formatSigningRequest(request.method, request.params);
+  dialog.showModal();
+  const choice = await new Promise<string>((resolve) => {
+    const onClose = () => { dialog.removeEventListener("close", onClose); resolve(dialog.returnValue || "reject"); };
+    dialog.addEventListener("close", onClose);
+  });
+  if (choice !== "approve") {
+    await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/signing/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ requestId: request.requestId, error: "User rejected the signing request" }),
+    }).catch(() => undefined);
+    return;
+  }
   try {
     const result = await (walletBinding.provider as { request(args: { method: string; params: unknown[] }): Promise<unknown> }).request({ method: request.method, params: request.params });
     await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/signing/resolve`, {

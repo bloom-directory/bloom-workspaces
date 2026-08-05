@@ -171,6 +171,7 @@ dialog::backdrop { background: #000a; backdrop-filter: blur(3px); }
 .dialog-card { padding: 24px; }
 .dialog-card h2 { font-size: 24px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 22px; }
+.signing-detail { background: #070a08; border: 1px solid var(--line); border-radius: 8px; padding: 12px; font: 12px ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow-y: auto; margin: 12px 0 0; color: var(--muted); }
 
 @media (max-width: 980px) {
   .workspace-panel { grid-template-columns: 1fr; }
