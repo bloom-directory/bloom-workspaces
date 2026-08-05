@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { Config } from "../config.js";
 import type { BloomDatabase } from "../db.js";
 import { audit } from "../db.js";
+import { requestLogger } from "../logging.js";
 import { clientIp, requestFingerprint, safeEqual, validBrowserOrigin } from "../security.js";
 import { AgentClient } from "./agent-client.js";
 import { AuthError, issueChallenge, verifyChallenge } from "./auth.js";
@@ -58,6 +59,7 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
   maintenance();
   const app = express();
   app.disable("x-powered-by");
+  app.use(requestLogger("control"));
   app.use((_request, response, next) => {
     response.set({
       "content-security-policy": "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: https://challenges.cloudflare.com https://api.web3modal.org https://cloud.reown.com https://echo.walletconnect.com https://explorer-api.walletconnect.com https://pulse.walletconnect.org https://rpc.walletconnect.org https://verify.walletconnect.com https://verify.walletconnect.org https://secure.walletconnect.org https://secure-mobile.walletconnect.com https://secure-mobile.walletconnect.org; frame-src https://challenges.cloudflare.com https://secure.walletconnect.org https://secure-mobile.walletconnect.com https://secure-mobile.walletconnect.org; img-src 'self' data: https://api.web3modal.org https://explorer-api.walletconnect.com https://walletconnect.org; font-src 'self' https://fonts.reown.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
@@ -95,6 +97,28 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
 
   app.get("/healthz", async (_request, response) => {
     try { await agent.health(); response.json({ ok: true }); } catch { response.status(503).json({ ok: false }); }
+  });
+  app.get("/metricsz", (_request, response) => {
+    const stats = db.prepare(`
+      SELECT
+        COUNT(*) FILTER (WHERE state = 'running') AS running,
+        COUNT(*) FILTER (WHERE state = 'pending') AS pending,
+        COUNT(*) FILTER (WHERE state = 'stopped') AS stopped,
+        COUNT(*) FILTER (WHERE state = 'failed') AS failed,
+        COUNT(*) AS total
+      FROM workspaces
+    `).get() as { running: number; pending: number; stopped: number; failed: number; total: number };
+    const uptimeSeconds = process.uptime();
+    const memoryUsage = process.memoryUsage();
+    response.json({
+      workspaces: stats,
+      uptimeSeconds,
+      memoryUsage: {
+        rssBytes: memoryUsage.rss,
+        heapUsedBytes: memoryUsage.heapUsed,
+        heapTotalBytes: memoryUsage.heapTotal,
+      },
+    });
   });
   app.get("/api/session", (request, response, next) => {
     try {

@@ -13,6 +13,7 @@ import { StructuredJobSpec } from "../jobs/model.js";
 import { safeEqual } from "../security.js";
 import { MAX_FILE_TRANSFER_BYTES } from "./data-files.js";
 import { RuntimeDataError, type WorkspaceRuntime } from "./runtime.js";
+import { requestLogger } from "../logging.js";
 import { GuestChannelError } from "./guest-channel.js";
 import { GuestConnectionStatus, SshLeaseBody, type AgentSshLeaseGrant } from "../ssh/api.js";
 import { workspaceKnownHostsLine } from "../ssh/client-plan.js";
@@ -55,6 +56,7 @@ export async function startAgent(config: Config, runtime: WorkspaceRuntime) {
   }>();
   const app = express();
   app.disable("x-powered-by");
+  app.use(requestLogger("agent"));
   app.use(express.json({ limit: "16kb" }));
   app.use((request, response, next) => {
     const token = request.headers.authorization?.replace(/^Bearer /, "") ?? "";

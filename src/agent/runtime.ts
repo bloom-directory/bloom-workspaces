@@ -38,7 +38,7 @@ export type WorkspaceFileWrite = {
 };
 
 export class RuntimeDataError extends Error {
-  constructor(message: string, readonly status: 400 | 404 | 409 | 413 | 501 = 400) { super(message); }
+  constructor(message: string, readonly status: 400 | 404 | 409 | 413 | 501 | 507 = 400) { super(message); }
 }
 
 export type TerminalMessage =

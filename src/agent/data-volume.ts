@@ -1,4 +1,5 @@
 import { constants } from "node:fs";
+import { statfs } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { link, mkdir, open, rm } from "node:fs/promises";
@@ -17,6 +18,14 @@ export function volumeDirectory(dataDir: string, volumeId: string) {
 export async function ensureExt4Volume(dataDir: string, volumeId: string, quotaBytes: number) {
   if (!Number.isSafeInteger(quotaBytes) || quotaBytes < 16 * 1024 * 1024 || quotaBytes > 5 * 1024 * 1024 * 1024) {
     throw new RuntimeDataError("Invalid volume quota", 400);
+  }
+  // Pre-flight: refuse to start if the host cannot accommodate the volume.
+  const { bavail, bsize } = await statfs(dataDir);
+  const available = bavail * bsize;
+  if (available < quotaBytes) {
+    throw new RuntimeDataError(
+      `Insufficient disk space: need ${quotaBytes} bytes, ${available} available`, 507,
+    );
   }
   const directory = volumeDirectory(dataDir, volumeId);
   const image = join(directory, "workspace.ext4");
