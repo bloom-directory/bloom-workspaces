@@ -139,10 +139,10 @@
           </div>
 
           <div id="panel-bloom" class="tool-panel hidden" role="tabpanel" aria-labelledby="tab-bloom">
-            <div class="tool-header"><div><h3>Bloom in this workspace</h3><p class="muted">A watch-only identity and read surface. Signing and transactions remain outside the guest.</p></div><button id="refresh-bloom" class="quiet" type="button">Refresh</button></div>
+            <div class="tool-header"><div><h3>Bloom in this workspace</h3><p class="muted">A watch-only identity and read surface. Transactions are signed through Bloom's Sealed Approval ceremony — keys never enter the workspace.</p></div><button id="refresh-bloom" class="quiet" type="button">Refresh</button></div>
             <p id="bloom-message" class="inline-message" role="status" aria-live="polite"></p>
             <div id="bloom-status" class="detail-grid"></div>
-            <aside class="security-note"><strong>No signing authority</strong><p>This workspace never receives your seed phrase, private key, wallet session, or permission to approve transactions.</p></aside>
+            <aside class="security-note"><strong>No signing keys in the workspace</strong><p>This workspace never receives your seed phrase, private key, or wallet session. Transactions are approved through Bloom's Sealed Approval ceremony — a WebAuthn-based flow that runs on your device, not inside the workspace VM.</p></aside>
           </div>
 
           <div id="panel-connections" class="tool-panel hidden" role="tabpanel" aria-labelledby="tab-connections">
@@ -170,19 +170,9 @@
       <section class="principles" aria-label="Security principles">
         <article><span>01</span><h3>Actually isolated</h3><p>Public deployments accept only microVM runtimes. A shell never runs in the web control plane.</p></article>
         <article><span>02</span><h3>Bounded by design</h3><p>Compute expires, uploads and jobs have limits, and package traffic follows an explicit policy.</p></article>
-        <article><span>03</span><h3>No signing keys</h3><p>The workspace is untrusted compute. Funded wallets and Bloom’s approval core stay elsewhere.</p></article>
+        <article><span>03</span><h3>Ceremony-signed</h3><p>Transactions use Bloom's Sealed Approval ceremony — keys stay on your device, never inside the workspace VM.</p></article>
       </section>
     </main>
-
-    <dialog id="outbox-dialog" aria-labelledby="outbox-title" aria-describedby="outbox-description">
-      <form method="dialog" class="dialog-card">
-        <p class="eyebrow">Outbox transaction</p>
-        <h2 id="outbox-title">Review Transaction</h2>
-        <p id="outbox-description" class="muted"></p>
-        <pre id="outbox-detail" class="outbox-detail"></pre>
-        <div class="dialog-actions"><button value="reject" class="secondary">Reject</button><button id="outbox-approve" value="approve" class="primary">Approve</button></div>
-      </form>
-    </dialog>
 
     <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description">
       <form method="dialog" class="dialog-card">

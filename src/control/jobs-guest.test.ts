@@ -9,8 +9,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { GuestResponse } from "../guest-protocol.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
-const servicePath = join(repoRoot, "ops/guest-control/bloom-guest-control.py");
-const helperPath = join(repoRoot, "ops/guest-control/bloom-workspace");
+const servicePath = join(repoRoot, "ops/guest-control/target/debug/bloom-guest-control");
+const helperPath = servicePath;
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => { while (cleanups.length) await cleanups.pop()?.(); });
@@ -56,7 +56,7 @@ describe("guest job, file, and Bloom control service", () => {
       result: {
         identity: { kind: "watch", address: "0x1111111111111111111111111111111111111111" },
         mount: { path: "/bloom" },
-        capabilities: { files: true, jobs: true, walletSigning: true, transactions: true },
+        capabilities: { files: true, jobs: true, walletSigning: false, transactions: false },
       },
     });
 
@@ -70,23 +70,33 @@ describe("guest job, file, and Bloom control service", () => {
   it("runs literal structured argv with an allowlisted environment as uid 1000 and no-new-privileges", async () => {
     const harness = await GuestHarness.create();
     const script = [
-      "import json, os, pathlib, sys",
-      "status = pathlib.Path('/proc/self/status').read_text()",
-      "nnp = next(line.split()[1] for line in status.splitlines() if line.startswith('NoNewPrivs:'))",
-      "print(json.dumps({'uid': os.getuid(), 'gid': os.getgid(), 'nnp': nnp, 'value': os.environ['APP_VALUE'], 'arg': sys.argv[1], 'cwd': os.getcwd(), 'has_loader': 'LD_PRELOAD' in os.environ}), flush=True)",
-    ].join("\n");
+      "const fs=require('fs');",
+      "const s=fs.readFileSync('/proc/self/status','utf8');",
+      "const nnp=s.split('\n').find(l=>l.startsWith('NoNewPrivs:')).split(/\s+/)[1];",
+      "console.log(JSON.stringify({uid:process.getuid(),gid:process.getgid(),nnp,value:process.env.APP_VALUE,arg:process.argv[1],cwd:process.cwd(),has_loader:'LD_PRELOAD' in process.env}));",
+    ].join("");
     const jobId = randomUUID();
     const started = await harness.request({
       operation: "job.start",
       jobId,
-      argv: ["python3", "-c", script, "; echo this-would-be-shell-injection"],
+      argv: ["node", "-e", script, "; echo this-would-be-shell-injection"],
       cwd: ".",
       environment: { APP_VALUE: "hello" },
       timeoutMs: 10_000,
     });
+    // Debug: print the script that was sent
+    const idx = script.indexOf("split(");
+    console.error("SCRIPT_HEX_AROUND_SPLIT:", Buffer.from(script.substring(idx, idx + 20)).toString("hex"));
+    console.error("SCRIPT_HAS_NEWLINE:", script.includes("\n"), "SCRIPT_LEN:", script.length);
     expect(started).toMatchObject({ ok: true, result: { jobId, state: "running" } });
 
     const completed = await harness.waitForTerminal(jobId);
+    if (completed.state !== "succeeded") {
+      console.error("JOB FAILED:", JSON.stringify(completed, null, 2));
+      if (completed.logs?.data) {
+        console.error("LOGS:", Buffer.from(completed.logs.data, "base64").toString("utf8"));
+      }
+    }
     expect(completed).toMatchObject({ state: "succeeded", exitCode: 0 });
     const output = JSON.parse(Buffer.from(completed.logs.data, "base64").toString("utf8"));
     expect(output).toMatchObject({ uid: 1000, gid: 1000, nnp: "1", value: "hello", arg: "; echo this-would-be-shell-injection", has_loader: false });
@@ -106,8 +116,8 @@ describe("guest job, file, and Bloom control service", () => {
     const harness = await GuestHarness.create();
     const cancellableId = randomUUID();
     const timeoutId = randomUUID();
-    const childScript = "import signal,subprocess,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); p=subprocess.Popen(['sleep','30']); print(p.pid,flush=True); time.sleep(30)";
-    expect(await harness.request({ operation: "job.start", jobId: cancellableId, argv: ["python3", "-c", childScript], cwd: "src", environment: {}, timeoutMs: 30_000 }))
+    const childScript = "process.on('SIGTERM',()=>{});const cp=require('child_process');const p=cp.spawn('sleep',['30'],{stdio:'ignore'});console.log(p.pid);setInterval(()=>{},60000);";
+    expect(await harness.request({ operation: "job.start", jobId: cancellableId, argv: ["node", "-e", childScript], cwd: "src", environment: {}, timeoutMs: 30_000 }))
       .toMatchObject({ ok: true, result: { state: "running" } });
     expect(await harness.request({ operation: "job.start", jobId: timeoutId, argv: ["sleep", "30"], cwd: "src", environment: {}, timeoutMs: 1000 }))
       .toMatchObject({ ok: true, result: { state: "running" } });
@@ -128,7 +138,7 @@ describe("guest job, file, and Bloom control service", () => {
     expect(await harness.request({
       operation: "job.start",
       jobId: largeId,
-      argv: ["python3", "-c", "import sys; sys.stdout.write('x' * (1200 * 1024)); sys.stdout.flush()"],
+      argv: ["node", "-e", "process.stdout.write('x'.repeat(1200*1024))"],
       cwd: "src",
       environment: {},
       timeoutMs: 10_000,
@@ -146,8 +156,7 @@ describe("guest job, file, and Bloom control service", () => {
     const root = await mkdtemp(join(tmpdir(), "bloom-guest-helper-"));
     const socketPath = join(root, "run/guest-control.sock");
     await mkdir(join(root, "src"));
-    const child = spawn("python3", [
-      servicePath,
+    const child = spawn(servicePath, [
       "--workspace", root,
       "--workspace-quota-bytes", String(1024 * 1024),
       "--job-uid", String(process.getuid?.() ?? 1000),
@@ -207,7 +216,6 @@ class GuestHarness {
     await mkdir(join(root, "src"), { recursive: true });
     const socketPath = withUnixSocket ? join(root, "guest-control.sock") : undefined;
     const argumentsList = [
-      servicePath,
       "--stdio",
       "--workspace", root,
       "--workspace-quota-bytes", String(16 * 1024 * 1024),
@@ -215,7 +223,7 @@ class GuestHarness {
       "--job-gid", String(process.getgid?.() ?? 1000),
     ];
     if (socketPath) argumentsList.push("--unix-socket", socketPath);
-    const child = spawn("python3", argumentsList, { stdio: "pipe" });
+    const child = spawn(servicePath, argumentsList, { stdio: "pipe" });
     const harness = new GuestHarness(root, child, socketPath);
     cleanups.push(async () => harness.close());
     if (socketPath) {

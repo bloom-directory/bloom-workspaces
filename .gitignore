@@ -6,3 +6,4 @@ artifacts/
 .env
 .DS_Store
 __pycache__/
+ops/guest-control/target/

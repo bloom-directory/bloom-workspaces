@@ -34,54 +34,12 @@ async function setup() {
   return { control, config, db, cookie, csrf, workspaceId };
 }
 
-describe("HTTP security: outbox path traversal rejection", () => {
-  it("rejects path traversal payloads in outbox confirm", async () => {
-    const { control, config, cookie, csrf, workspaceId } = await setup();
-
-    for (const payload of ["../../..", "..%2f..%2f", "foo/bar", "..", "a\\b"]) {
-      const response = await request(control.app)
-        .post(`/api/workspaces/${workspaceId}/outbox/confirm`)
-        .set(headers(config.origin, cookie, csrf))
-        .send({ id: payload, chain: "8453", wallet: "default", confirmText: "ok" });
-      expect(response.status, `confirm id="${payload}"`).toBeGreaterThanOrEqual(400);
-    }
-  });
-
-  it("rejects path traversal payloads in outbox cancel", async () => {
-    const { control, config, cookie, csrf, workspaceId } = await setup();
-
-    for (const payload of ["../../..", "..%2f..%2f", "foo/bar", "..", "a\\b"]) {
-      const response = await request(control.app)
-        .post(`/api/workspaces/${workspaceId}/outbox/cancel`)
-        .set(headers(config.origin, cookie, csrf))
-        .send({ id: payload, chain: "8453", wallet: "default" });
-      expect(response.status, `cancel id="${payload}"`).toBeGreaterThanOrEqual(400);
-    }
-  });
-
-  it("rejects path traversal in chain and wallet fields", async () => {
-    const { control, config, cookie, csrf, workspaceId } = await setup();
-
-    // chain traversal
-    const chainResponse = await request(control.app)
-      .post(`/api/workspaces/${workspaceId}/outbox/confirm`)
-      .set(headers(config.origin, cookie, csrf))
-      .send({ id: "tx-1", chain: "../../etc", wallet: "default", confirmText: "ok" });
-    expect(chainResponse.status).toBeGreaterThanOrEqual(400);
-
-    // wallet traversal
-    const walletResponse = await request(control.app)
-      .post(`/api/workspaces/${workspaceId}/outbox/cancel`)
-      .set(headers(config.origin, cookie, csrf))
-      .send({ id: "tx-1", chain: "8453", wallet: "../../secret" });
-    expect(walletResponse.status).toBeGreaterThanOrEqual(400);
-  });
-
+describe("HTTP security: ceremony endpoint", () => {
   it("rejects requests without authentication", async () => {
     const { control, workspaceId } = await setup();
 
     const response = await request(control.app)
-      .get(`/api/workspaces/${workspaceId}/outbox/pending`);
+      .get(`/api/workspaces/${workspaceId}/ceremony`);
     expect(response.status).toBe(401);
   });
 
@@ -90,9 +48,19 @@ describe("HTTP security: outbox path traversal rejection", () => {
     const outsider = createTestSession(db, config, "wallet-b");
 
     const response = await request(control.app)
-      .get(`/api/workspaces/${workspaceId}/outbox/pending`)
+      .get(`/api/workspaces/${workspaceId}/ceremony`)
       .set("cookie", outsider.cookie);
     expect(response.status).toBe(404);
+  });
+
+  it("returns ceremony info for the workspace owner", async () => {
+    const { control, config, cookie, csrf, workspaceId } = await setup();
+
+    const response = await request(control.app)
+      .get(`/api/workspaces/${workspaceId}/ceremony`)
+      .set(headers(config.origin, cookie, csrf));
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty("ceremonyUrl");
   });
 });
 

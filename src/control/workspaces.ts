@@ -150,26 +150,11 @@ export class WorkspaceService {
     catch (error) { throw this.agentWorkspaceError(error); }
   }
 
-  async outboxPending(wallet: string, id: string) {
-    const row = this.ownedRunning(wallet, id, "outbox_pending");
-    try { return await this.agent.outboxPending(row.id); }
-    catch (error) { throw this.agentWorkspaceError(error); }
-  }
-
-  async outboxConfirm(wallet: string, id: string, body: { id: string; chain: string; wallet: string; confirmText: string }) {
-    const row = this.ownedRunning(wallet, id, "outbox_confirm");
+  async ceremonyPending(wallet: string, id: string) {
+    const row = this.ownedRunning(wallet, id, "ceremony_pending");
     try {
-      const result = await this.agent.outboxConfirm(row.id, body);
-      audit(this.db, "workspace.outbox_confirmed", row.wallet, row.id, { txId: body.id, chain: body.chain, wallet: body.wallet });
-      return result;
-    } catch (error) { throw this.agentWorkspaceError(error); }
-  }
-
-  async outboxCancel(wallet: string, id: string, body: { id: string; chain: string; wallet: string }) {
-    const row = this.ownedRunning(wallet, id, "outbox_cancel");
-    try {
-      const result = await this.agent.outboxCancel(row.id, body);
-      audit(this.db, "workspace.outbox_cancelled", row.wallet, row.id, { txId: body.id, chain: body.chain, wallet: body.wallet });
+      const result = await this.agent.ceremonyPending(row.id);
+      audit(this.db, "workspace.ceremony_polled", row.wallet, row.id, { count: result.requests.length });
       return result;
     } catch (error) { throw this.agentWorkspaceError(error); }
   }

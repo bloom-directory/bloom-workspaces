@@ -71,6 +71,7 @@ type ConnectionGrant = {
   tunnel: { transport: "websocket"; protocol: "bloom-ssh-v1"; path: string; proxyHelper: string };
   capability?: { status?: string; reason?: string; requiresAdmin?: boolean; fallback?: string };
   sshArgv?: string[];
+  ceremonyArgv?: string[];
   sshTunnelArgv?: string[];
   mountArgv?: string[];
   unmountArgv?: string[];
@@ -105,7 +106,7 @@ let fit: FitAddon | undefined;
 let workspacePollTimer: number | undefined;
 let leaseTimer: number | undefined;
 let jobPollTimer: number | undefined;
-let outboxPollTimer: number | undefined;
+let ceremonyPollTimer: number | undefined;
 let jobEvents: EventSource | undefined;
 let activeJob: JobStatus | undefined;
 let activeConnection: ConnectionGrant | undefined;
@@ -272,13 +273,13 @@ async function connectMobileWallet() {
   const provider = await EthereumProvider.init({
     projectId: walletConnectProjectId,
     optionalChains: [value.chainId],
-    methods: ["personal_sign", "eth_sendTransaction", "eth_signTypedData_v4"],
+    methods: ["personal_sign"],
     events: ["accountsChanged", "chainChanged"],
     showQrModal: true,
     telemetryEnabled: false,
     metadata: {
       name: "Bloom Workspaces",
-      description: "Sign in to an isolated Linux workspace. Sign messages and transactions are relayed for your approval.",
+      description: "Sign in to an isolated Linux workspace. Transaction signing uses Bloom's Sealed Approval ceremony.",
       url: location.origin,
       icons: [`${location.origin}/bloom-workspaces.svg`],
       redirect: { universal: `${location.origin}/` },
@@ -470,7 +471,7 @@ function renderWorkspace(workspace?: Workspace) {
     consoleElement.classList.remove("hidden");
     if (loadedWorkspaceId !== workspace.id) resetWorkspaceTools(workspace.id);
     if (isAvailable("terminal") && !socket) openTerminal(workspace);
-    if (!outboxPollTimer) startOutboxPoll(workspace.id);
+    if (!ceremonyPollTimer) startCeremonyPoll(workspace.id);
   }
   updateLease(workspace);
   workspacePollTimer = window.setTimeout(refreshWorkspace, workspace.state === "running" ? 10_000 : 1_500);
@@ -489,7 +490,13 @@ function updateLease(workspace: Workspace) {
   const remaining = Math.max(0, workspace.leaseExpiresAt - Date.now());
   const minutes = Math.floor(remaining / 60_000);
   const seconds = Math.floor((remaining % 60_000) / 1000);
-  $("lease").textContent = remaining > 0 ? `Expires in ${minutes}:${seconds.toString().padStart(2, "0")}` : "Lease expired";
+  const leaseEl = $("lease");
+  leaseEl.textContent = remaining > 0 ? `Expires in ${minutes}:${seconds.toString().padStart(2, "0")}` : "Lease expired";
+  leaseEl.classList.toggle("lease-warning", remaining > 0 && remaining <= 300_000);
+  leaseEl.classList.toggle("lease-critical", remaining > 0 && remaining <= 60_000);
+  if (remaining === 0) {
+    setMessage("Your workspace lease has expired. The machine will stop automatically.");
+  }
   if (remaining > 0) leaseTimer = window.setTimeout(() => updateLease(workspace), 1_000);
 }
 
@@ -515,7 +522,7 @@ function resetWorkspaceTools(id: string) {
 function closeWorkspaceResources() {
   closeTerminal();
   closeJobStream();
-  closeOutboxPoll();
+  closeCeremonyPoll();
   clearConnectionGrant();
   loadedWorkspaceId = undefined;
   activeJob = undefined;
@@ -523,51 +530,75 @@ function closeWorkspaceResources() {
   window.clearTimeout(leaseTimer);
 }
 
-function closeOutboxPoll() {
-  window.clearInterval(outboxPollTimer);
-  outboxPollTimer = undefined;
+function closeCeremonyPoll() {
+  window.clearInterval(ceremonyPollTimer);
+  ceremonyPollTimer = undefined;
 }
 
-function startOutboxPoll(workspaceId: string) {
-  closeOutboxPoll();
+function startCeremonyPoll(workspaceId: string) {
+  closeCeremonyPoll();
   const seen = new Set<string>();
-  outboxPollTimer = window.setInterval(async () => {
-    if (!walletBinding || !session.authenticated) return;
+  ceremonyPollTimer = window.setInterval(async () => {
+    if (!session.authenticated) return;
     try {
-      const result = await api<{ requests: { id: string; chain: string; wallet: string; planMd: string }[] }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/outbox/pending`);
+      const result = await api<{ requests: { id: string; chain: string; wallet: string; planMd: string; ceremonyUrl: string | null }[] }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/ceremony`);
       for (const request of result.requests) {
         if (seen.has(request.id)) continue;
         seen.add(request.id);
-        void promptAndResolveOutboxRequest(workspaceId, request);
+        showCeremonyNotification(request);
       }
       if (seen.size > 50) { const keep = new Set(result.requests.map((r) => r.id)); for (const id of seen) if (!keep.has(id)) seen.delete(id); }
     } catch { /* workspace may have stopped */ }
   }, 3_000);
 }
 
-async function promptAndResolveOutboxRequest(workspaceId: string, request: { id: string; chain: string; wallet: string; planMd: string }) {
-  if (!walletBinding) return;
-  const dialog = $("outbox-dialog") as HTMLDialogElement;
-  const description = $("outbox-description");
-  const detail = $("outbox-detail");
-  description.textContent = `Your workspace has a pending transaction for review. Review the plan below, then approve or reject.`;
-  detail.textContent = request.planMd;
-  dialog.showModal();
-  const choice = await new Promise<string>((resolve) => {
-    const onClose = () => { dialog.removeEventListener("close", onClose); resolve(dialog.returnValue || "reject"); };
-    dialog.addEventListener("close", onClose);
-  });
-  if (choice !== "approve") {
-    await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/outbox/cancel`, {
-      method: "POST",
-      body: JSON.stringify({ id: request.id, chain: request.chain, wallet: request.wallet }),
-    }).catch(() => undefined);
-    return;
+function showCeremonyNotification(request: { id: string; chain: string; wallet: string; planMd: string; ceremonyUrl: string | null }) {
+  const banner = document.createElement("div");
+  banner.className = "ceremony-notification";
+  banner.setAttribute("role", "alert");
+
+  const title = document.createElement("strong");
+  title.textContent = "Pending transaction approval";
+
+  const plan = document.createElement("pre");
+  plan.className = "ceremony-plan";
+  plan.textContent = request.planMd;
+
+  banner.append(title, plan);
+
+  if (request.ceremonyUrl) {
+    const link = document.createElement("a");
+    link.href = request.ceremonyUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.className = "ceremony-link";
+    link.textContent = "Open approval ceremony →";
+    link.addEventListener("click", () => {
+      setTimeout(() => { banner.remove(); }, 5_000);
+    });
+    banner.append(link);
+  } else {
+    const hint = document.createElement("p");
+    hint.className = "ceremony-hint";
+    hint.textContent = "Connect via SSH with port forwarding (-L 18734:localhost:18734) to approve this transaction through Bloom's Sealed Approval ceremony.";
+    banner.append(hint);
   }
-  await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/outbox/confirm`, {
-    method: "POST",
-    body: JSON.stringify({ id: request.id, chain: request.chain, wallet: request.wallet, confirmText: "y" }),
-  }).catch(() => undefined);
+
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.textContent = "Dismiss";
+  dismiss.className = "ceremony-dismiss";
+  dismiss.addEventListener("click", () => banner.remove());
+  banner.append(dismiss);
+
+  const container = $("ceremony-notifications") ?? (() => {
+    const div = document.createElement("div");
+    div.id = "ceremony-notifications";
+    div.className = "ceremony-container";
+    $("workspace-console").prepend(div);
+    return div;
+  })();
+  container.append(banner);
 }
 
 function openTerminal(workspace: Workspace) {
@@ -592,7 +623,17 @@ function openTerminal(workspace: Workspace) {
       if (message.type === "closed") terminal?.writeln(`\r\n\x1b[33m[workspace closed: ${message.reason ?? "ended"}]\x1b[0m`);
     } catch { terminal?.writeln("\r\n\x1b[31m[invalid terminal response]\x1b[0m"); }
   });
-  socket.addEventListener("close", () => { socket = undefined; });
+  socket.addEventListener("close", (event) => {
+    socket = undefined;
+    if (loadedWorkspaceId === workspace.id && !event.wasClean && event.code !== 1000) {
+      terminal?.writeln("\r\n\x1b[33m[connection lost — reconnecting…]\x1b[0m");
+      setTimeout(() => {
+        if (loadedWorkspaceId === workspace.id && !socket) {
+          openTerminal(workspace);
+        }
+      }, 2_000);
+    }
+  });
   socket.addEventListener("error", () => terminal?.writeln("\r\n\x1b[31m[terminal connection failed]\x1b[0m"));
   terminal.onData((data) => socket?.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "input", data })));
   window.addEventListener("resize", resizeTerminal);
@@ -1058,6 +1099,7 @@ function renderConnectionGrant(grant: ConnectionGrant) {
   commands.append(connectionTextBlock("Proxy helper", `${grant.tunnel.proxyHelper} · ${grant.tunnel.path}`));
   for (const [label, argv] of [
     ["Connect with SSH · argv", grant.sshArgv],
+    ["SSH with ceremony port forward · argv", grant.ceremonyArgv],
     ["Start private SSH tunnel · argv", grant.sshTunnelArgv],
     ["Mount NFS · argv", grant.mountArgv],
     ["Unmount NFS · argv", grant.unmountArgv],
@@ -1134,7 +1176,8 @@ async function confirmAction(title: string, description: string, action: string)
   $("confirm-description").textContent = description;
   $("confirm-action").textContent = action;
   dialog.returnValue = "cancel";
-  dialog.showModal();
+  try { dialog.showModal(); }
+  catch { return false; }
   return new Promise<boolean>((resolve) => dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true }));
 }
 

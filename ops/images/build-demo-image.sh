@@ -53,8 +53,14 @@ mapfile -t packages < <(sed -E '/^[[:space:]]*(#|$)/d' "$repo_root/ops/images/pa
 install -D -m 0755 "$repo_root/ops/images/guest/bloom-init" "$scratch/rootfs/usr/local/sbin/bloom-init"
 install -D -m 0755 "$repo_root/ops/images/guest/bloom-workspace-device" "$scratch/rootfs/usr/local/sbin/bloom-workspace-device"
 install -D -m 0755 "$repo_root/ops/images/guest/bloom-workspace-identity" "$scratch/rootfs/usr/local/sbin/bloom-workspace-identity"
-install -D -m 0755 "$repo_root/ops/guest-control/bloom-guest-control.py" "$scratch/rootfs/usr/local/libexec/bloom-guest-control"
-install -D -m 0755 "$repo_root/ops/guest-control/bloom-workspace" "$scratch/rootfs/usr/local/bin/bloom-workspace"
+# Build the Rust guest-control binary (static musl for Alpine)
+guest_control_bin="$repo_root/ops/guest-control/target/x86_64-unknown-linux-musl/release/bloom-guest-control"
+if [[ ! -x "$guest_control_bin" ]]; then
+  printf 'Building Rust guest-control binary (musl)...\n' >&2
+  (cd "$repo_root/ops/guest-control" && cargo build --release --target x86_64-unknown-linux-musl)
+fi
+install -D -m 0755 "$guest_control_bin" "$scratch/rootfs/usr/local/libexec/bloom-guest-control"
+install -D -m 0755 "$guest_control_bin" "$scratch/rootfs/usr/local/bin/bloom-workspace"
 install -D -m 0755 "$repo_root/ops/bloom/guest-bootstrap.sh" "$scratch/rootfs/usr/local/sbin/bloom-guest-bootstrap"
 install -D -m 0755 "$repo_root/ops/connections/workspace-ssh-session" "$scratch/rootfs/usr/local/libexec/bloom-workspace-shell"
 install -D -m 0755 "$bloom_artifact" "$scratch/rootfs/usr/local/bin/bloom"
@@ -102,7 +108,7 @@ provenance="$artifact_dir/bloom-alpine.provenance.txt"
   printf 'bloom_cli=installed-static-musl\n'
   printf 'bloom_cli_release=v0.1.3\n'
   printf 'bloom_cli_sha256=%s\n' "$(sha256sum "$bloom_artifact" | cut -d' ' -f1)"
-  printf 'guest_control_sha256=%s\n' "$(sha256sum "$repo_root/ops/guest-control/bloom-guest-control.py" | cut -d' ' -f1)"
+  printf 'guest_control_sha256=%s\n' "$(sha256sum "$guest_control_bin" | cut -d' ' -f1)"
 } >"$provenance"
 
 truncate -s 4G "$artifact_dir/bloom-alpine.ext4"

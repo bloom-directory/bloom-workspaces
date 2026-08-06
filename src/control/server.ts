@@ -262,26 +262,10 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
       response.json(await workspaces.bloomStatus(session.wallet, String(request.params.id ?? "")));
     } catch (error) { next(error); }
   });
-  app.get("/api/workspaces/:id/outbox/pending", requireSession, async (request, response, next) => {
+  app.get("/api/workspaces/:id/ceremony", requireSession, async (request, response, next) => {
     try {
       const { session } = response.locals.context as { session: Session };
-      response.json(await workspaces.outboxPending(session.wallet, String(request.params.id ?? "")));
-    } catch (error) { next(error); }
-  });
-  app.post("/api/workspaces/:id/outbox/confirm", requireSession, async (request, response, next) => {
-    try {
-      const { session } = response.locals.context as { session: Session };
-      const body = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), chain: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/), wallet: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), confirmText: z.string().min(1) }).strict().parse(request.body);
-      await workspaces.outboxConfirm(session.wallet, String(request.params.id ?? ""), body);
-      response.status(204).end();
-    } catch (error) { next(error); }
-  });
-  app.post("/api/workspaces/:id/outbox/cancel", requireSession, async (request, response, next) => {
-    try {
-      const { session } = response.locals.context as { session: Session };
-      const body = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), chain: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/), wallet: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/) }).strict().parse(request.body);
-      await workspaces.outboxCancel(session.wallet, String(request.params.id ?? ""), body);
-      response.status(204).end();
+      response.json(await workspaces.ceremonyPending(session.wallet, String(request.params.id ?? "")));
     } catch (error) { next(error); }
   });
   app.get("/api/workspaces/:id/connections", requireSession, async (request, response, next) => {
@@ -314,7 +298,7 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
       const clientPlan = !clientInput
         ? undefined
         : grant.mode === "shell"
-          ? { sshArgv: createSshClientArgv(clientInput) }
+          ? { sshArgv: createSshClientArgv(clientInput), ceremonyArgv: [...createSshClientArgv(clientInput), "-L", "18734:localhost:18734"] }
           : createNfsClientPlan({
               ...clientInput,
               platform: body.client!.platform,

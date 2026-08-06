@@ -1,51 +1,41 @@
-# Guest control service
+# bloom-guest-control
 
-`bloom-guest-control.py` is the guest-owned implementation of protocol v1. It
-supports bounded file chunks, structured jobs, absolute-cursor log reads,
-process-group cancellation, watch-only Bloom status, one-time SSH/NFS
-configuration, and outbox relay (reads pending outbox entries from bloom serve
-via IPC and relays plan.md to the user's browser for approval). It has no TCP listener: the production transports are QEMU virtio-serial stdio, AF_VSOCK port
-5001, and a mode-0600 guest-local Unix socket for `bloom-workspace`. Stdio and
-socket transports may run concurrently and share one bounded job table.
+A single Rust binary that serves as both the guest-side control daemon and the
+guest-local CLI client.
 
-The image should install:
+## Server mode
 
-- `bloom-guest-control.py` at `/usr/local/libexec/bloom-guest-control`;
-- `bloom-workspace` at `/usr/local/bin/bloom-workspace`.
+The server accepts the version-1 JSON-line protocol over AF_VSOCK, a guest-local
+Unix socket, and/or stdio. It provides:
 
-Start the controller as root so an untrusted workspace process cannot signal or
-ptrace it:
+- Bounded file CRUD (`fs.list`, `fs.read`, `fs.write`, `fs.delete`)
+- Structured job execution (`job.start`, `job.status`, `job.cancel`) with
+  `prlimit` + `setpriv` isolation as the unprivileged workspace account
+- Bloom status reporting (`bloom.status`)
+- Ceremony pending scan (`ceremony.pending`)
+- Connection configuration (`connections.configure`)
+
+Each job is exec'd via `prlimit` and `setpriv` as the unprivileged workspace
+account with no capabilities and no-new-privileges.
+
+## Client mode
+
+When invoked with a subcommand (`status`, `hello`, `files`, `jobs`), the binary
+runs as a guest-local CLI client that connects to the server's Unix socket.
+
+## Building
 
 ```sh
-/usr/local/libexec/bloom-guest-control \
-  --workspace /workspace \
-  --workspace-quota-bytes 134217728 \
-  --job-uid 1000 --job-gid 1000 \
-  --unix-socket /run/bloom/guest-control.sock \
-  --vsock-port 5001
+cargo build --release
 ```
 
-For QEMU, replace `--vsock-port 5001` with `--stdio` while retaining the Unix
-socket for the guest helper. `.` is the explicit `/workspace` sentinel for
-directory listing and job cwd only; file read/write/delete operations require a
-non-root relative path. File write/delete responses include current
-`usedBytes` and `quotaBytes` without returning file content.
+For the Alpine guest image (static musl):
 
-Jobs never pass through a shell added by the service. The requested argv is
-executed by `prlimit` and `setpriv`: UID/GID 1000, empty capability sets,
-no-new-privileges, a private process group, 64 processes, 64 descriptors, no
-core dumps, and 64 MiB per-file output. User-provided environment keys are
-limited to documented safe names and `APP_`, `JOB_`, or `TEST_` namespaces.
-The controller copies only the operator's controlled proxy and CA path settings;
-it does not inherit wallet, control-plane, or host credentials.
+```sh
+cargo build --release --target x86_64-unknown-linux-musl
+```
 
-`bloom.status` reports only the public watch address, whether `/bloom` is
-mounted, and capability flags. It
-never reads or returns passphrases, private keys, cookies, or session material.
+## Binary layout in the guest image
 
-`connections.configure` is accepted once per guest scope and only by the
-root-owned controller. It validates an Ed25519 CA **public** key, creates an
-ephemeral host key, writes wallet/workspace principals, and starts the locked
-guest sshd. With the verified QEMU NFSD kernel and a persistent volume it may
-also export guest-loopback NFSv4. The CA private key and user private key never
-enter the guest.
+- `bloom-guest-control` at `/usr/local/libexec/bloom-guest-control` (server mode)
+- `bloom-workspace` at `/usr/local/bin/bloom-workspace` (client mode — same binary)

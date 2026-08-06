@@ -4,9 +4,13 @@ set -eu
 # Provision Bloom inside a workspace using the authenticated login address as a
 # watch-only wallet. This helper has no direct signer path: it accepts one EVM
 # address, never a key/passphrase, and refuses to run beside signer state.
-# Transaction signing uses Bloom's native outbox system: the guest controller
-# reads pending outbox entries from bloom serve via IPC and relays plan.md to
-# the user's browser for approval. Private keys never enter the workspace VM.
+#
+# Transaction signing uses Bloom's Sealed Approval ceremony: when a workspace
+# process stages a transaction, Bloom writes plan.md and approval_challenge.json
+# to the VFS outbox. The ceremony URL (http://localhost:18734/ceremony/<token>)
+# is surfaced to the user. The user must connect via SSH with port forwarding
+# (-L 18734:localhost:18734) and open the ceremony URL in their local browser
+# to complete the WebAuthn approval. Private keys never enter the workspace VM.
 
 BLOOM_BIN=${BLOOM_BIN:-/usr/local/bin/bloom}
 BLOOM_WORKSPACE_ROOT=/workspace
