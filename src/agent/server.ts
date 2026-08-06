@@ -331,7 +331,11 @@ function rejectUpgrade(socket: import("node:stream").Duplex) {
 function attachTerminal(socket: WebSocket, id: string, runtime: WorkspaceRuntime) {
   let detach: (() => void) | undefined;
   try {
-    detach = runtime.attach(id, (message) => socket.readyState === socket.OPEN && socket.send(JSON.stringify(message)));
+    detach = runtime.attach(id, (message) => {
+      if (socket.readyState !== socket.OPEN) return;
+      socket.send(JSON.stringify(message));
+      if (message.type === "closed") socket.close(1000, "Workspace terminal closed");
+    });
   } catch (error) {
     socket.close(1011, error instanceof Error ? error.message : "Workspace unavailable");
     return;

@@ -68,6 +68,10 @@ describe("security utilities", () => {
       const cookies = parseCookies("  spaced  =  value  ");
       expect(cookies.get("spaced")).toBe("value");
     });
+
+    it("ignores malformed percent encoding without dropping valid cookies", () => {
+      expect(parseCookies("broken=%E0%A4%A; bloom_session=valid-token")).toEqual(new Map([["bloom_session", "valid-token"]]));
+    });
   });
 
   describe("clientIp", () => {

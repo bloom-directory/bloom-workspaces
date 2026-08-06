@@ -17,6 +17,7 @@ import { StructuredJobSpec, isTerminalJobState } from "../jobs/model.js";
 import { SshLeaseBody } from "../ssh/api.js";
 import { createSshClientArgv } from "../ssh/client-plan.js";
 import { createNfsClientPlan } from "../nfs/client-plan.js";
+import { TerminalAdmission } from "./terminal-admission.js";
 
 const CreateWorkspace = z.object({
   turnstileToken: z.string().min(1).max(4096).nullable().optional(),
@@ -345,6 +346,7 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
   const server = createServer(app);
   const browserSockets = new WebSocketServer({ noServer: true, maxPayload: 70 * 1024 });
   const connectionSockets = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  const terminalAdmission = new TerminalAdmission(4, Math.max(4, config.maxRunning * 4));
   server.on("upgrade", (request, socket, head) => {
     try {
       const url = new URL(request.url ?? "/", config.origin);
@@ -365,8 +367,12 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
       if (!match?.[1]) throw new Error("Not found");
       const session = readSession(request as Request, db, config);
       if (!session || !workspaces.ownsRunning(session.wallet, match[1])) throw new Error("Unauthorized");
-      browserSockets.handleUpgrade(request, socket, head, (browser) => {
-        const upstream = agent.terminal(match[1]!);
+      const workspaceId = match[1];
+      const releaseTerminal = terminalAdmission.acquire(workspaceId);
+      if (!releaseTerminal) { rejectHttpUpgrade(socket, "503 Service Unavailable"); return; }
+      try { browserSockets.handleUpgrade(request, socket, head, (browser) => {
+        browser.once("close", releaseTerminal);
+        const upstream = agent.terminal(workspaceId);
         const pending: Array<{ data: Parameters<typeof upstream.send>[0]; binary: boolean }> = [];
         upstream.once("open", () => {
           for (const message of pending.splice(0)) upstream.send(message.data, { binary: message.binary });
@@ -384,15 +390,15 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
         browser.once("close", () => upstream.close());
         upstream.once("close", () => browser.close());
         browser.once("error", closeBoth); upstream.once("error", closeBoth);
-      });
-    } catch { socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n"); socket.destroy(); }
+      }); } catch (error) { releaseTerminal(); throw error; }
+    } catch { rejectHttpUpgrade(socket, "401 Unauthorized"); }
   });
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(config.port, "127.0.0.1", () => { server.off("error", reject); resolve(); });
   });
-  const reconciler = setInterval(() => void workspaces.reconcile(), 2_000);
+  const reconciler = setInterval(() => void workspaces.reconcile().catch((error) => console.error("Workspace reconciliation failed", error)), 2_000);
   reconciler.unref();
   const janitor = setInterval(maintenance, 60 * 60_000);
   janitor.unref();
@@ -404,6 +410,7 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
       browserSockets.clients.forEach((socket) => socket.close(1012, "server shutting down"));
       connectionSockets.clients.forEach((socket) => socket.close(1012, "server shutting down"));
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await workspaces.waitForReconciliation().catch((error) => console.error("Workspace reconciliation failed during shutdown", error));
       db.close();
     },
   };
@@ -447,3 +454,8 @@ function defaultMountPoint(platform: "linux" | "macos" | "windows" | "android" |
 }
 
 function waitFor(milliseconds: number) { return new Promise<void>((resolve) => setTimeout(resolve, milliseconds)); }
+
+function rejectHttpUpgrade(socket: import("node:stream").Duplex, status: string) {
+  if (!socket.destroyed) socket.write(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`);
+  socket.destroy();
+}

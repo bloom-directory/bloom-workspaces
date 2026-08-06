@@ -25,7 +25,8 @@ export function parseCookies(header: string | undefined) {
   for (const item of header?.split(";") ?? []) {
     const index = item.indexOf("=");
     if (index < 1) continue;
-    cookies.set(item.slice(0, index).trim(), decodeURIComponent(item.slice(index + 1).trim()));
+    try { cookies.set(item.slice(0, index).trim(), decodeURIComponent(item.slice(index + 1).trim())); }
+    catch { /* Ignore malformed cookie values instead of failing the request. */ }
   }
   return cookies;
 }

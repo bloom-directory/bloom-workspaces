@@ -14,7 +14,9 @@ export class WorkspaceError extends Error {
 }
 
 export class WorkspaceService {
-  private reconciling = false;
+  private reconciliation: Promise<void> | undefined;
+  private readonly stopOperations = new Map<string, Promise<void>>();
+  private readonly destroyingVolumes = new Set<string>();
 
   constructor(
     private readonly db: BloomDatabase,
@@ -30,6 +32,9 @@ export class WorkspaceService {
     const storageMode = options.storage ?? "disposable";
     if (storageMode === "persistent" && this.runtimeDataCapabilities?.persistence === false) {
       throw new WorkspaceError(this.runtimeDataCapabilities.persistenceReason ?? "Persistent storage is unavailable for this runtime", 501);
+    }
+    if (storageMode === "persistent" && this.destroyingVolumes.has(normalizedWallet)) {
+      throw new WorkspaceError("The persistent workspace volume is being destroyed", 409);
     }
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -53,7 +58,7 @@ export class WorkspaceService {
         .run(row.id, row.wallet, row.ip_hash, row.state, row.runtime, row.created_at, row.lease_expires_at, row.storage_mode, row.volume_id, row.storage_quota_bytes);
       audit(this.db, "workspace.requested", normalizedWallet, row.id, { runtime: row.runtime, storage: row.storage_mode, quotaBytes: row.storage_quota_bytes });
       this.db.exec("COMMIT");
-      void this.reconcile();
+      this.scheduleReconciliation();
       return this.publicWorkspace(row);
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -73,10 +78,8 @@ export class WorkspaceService {
     const row = this.db.prepare(`SELECT * FROM workspaces WHERE wallet = ? AND state IN (${ACTIVE}) ORDER BY created_at DESC LIMIT 1`).get(wallet.toLowerCase()) as WorkspaceRow | undefined;
     if (!row) return;
     this.db.prepare("UPDATE workspaces SET state = 'stopping' WHERE id = ? AND state IN ('queued','provisioning','running')").run(row.id);
-    await this.agent.stop(row.id).catch((error) => audit(this.db, "workspace.agent_stop_failed", wallet, row.id, { error: String(error) }));
-    this.db.prepare("UPDATE workspaces SET state = 'stopped', stopped_at = ? WHERE id = ?").run(Date.now(), row.id);
-    audit(this.db, "workspace.stopped", wallet, row.id, { reason: "owner" });
-    void this.reconcile();
+    await this.stopWorkspace(row, "owner");
+    this.scheduleReconciliation();
   }
 
   ownsRunning(wallet: string, id: string) {
@@ -188,70 +191,104 @@ export class WorkspaceService {
     if (!volume) throw new WorkspaceError("No persistent workspace volume exists", 404);
     const attached = this.db.prepare(`SELECT 1 FROM workspaces WHERE volume_id = ? AND state IN (${ACTIVE})`).get(volume.id);
     if (attached) throw new WorkspaceError("Stop the workspace before destroying its persistent volume", 409);
-    try { await this.agent.destroyVolume(volume.id); }
-    catch (error) { throw this.agentWorkspaceError(error); }
-    this.db.prepare("UPDATE persistent_volumes SET destroyed_at = ? WHERE id = ? AND destroyed_at IS NULL").run(Date.now(), volume.id);
-    audit(this.db, "workspace.volume_destroyed", normalizedWallet, undefined, { quotaBytes: volume.quota_bytes });
+    if (this.destroyingVolumes.has(normalizedWallet)) throw new WorkspaceError("The persistent workspace volume is already being destroyed", 409);
+    this.destroyingVolumes.add(normalizedWallet);
+    try {
+      try { await this.agent.destroyVolume(volume.id); }
+      catch (error) { throw this.agentWorkspaceError(error); }
+      this.db.prepare("UPDATE persistent_volumes SET destroyed_at = ? WHERE id = ? AND destroyed_at IS NULL").run(Date.now(), volume.id);
+      audit(this.db, "workspace.volume_destroyed", normalizedWallet, undefined, { quotaBytes: volume.quota_bytes });
+    } finally { this.destroyingVolumes.delete(normalizedWallet); }
   }
 
   async recover() {
-    const active = this.db.prepare("SELECT * FROM workspaces WHERE state IN ('running','provisioning')").all() as unknown as WorkspaceRow[];
-    for (const row of active) {
-      const status = await this.agent.status(row.id).catch(() => ({ state: "missing" as const }));
-      if (status.state !== "running") {
-        this.db.prepare("UPDATE workspaces SET state = 'failed', stopped_at = ?, failure = ? WHERE id = ?")
-          .run(Date.now(), "Workspace node restarted; request a new workspace", row.id);
-        audit(this.db, "workspace.lost", row.wallet, row.id, { agentState: status.state });
-      }
-    }
     await this.reconcile();
   }
 
-  async reconcile() {
-    if (this.reconciling) return;
-    this.reconciling = true;
-    try {
-      const expired = this.db.prepare("SELECT * FROM workspaces WHERE state IN ('queued','provisioning','running') AND lease_expires_at <= ?").all(Date.now()) as unknown as WorkspaceRow[];
-      for (const row of expired) {
-        await this.agent.stop(row.id).catch(() => undefined);
-        this.db.prepare("UPDATE workspaces SET state = 'stopped', stopped_at = ? WHERE id = ?").run(Date.now(), row.id);
-        audit(this.db, "workspace.stopped", row.wallet, row.id, { reason: "lease_expired" });
-      }
+  reconcile() {
+    if (this.reconciliation) return this.reconciliation;
+    const reconciliation = this.runReconciliation();
+    this.reconciliation = reconciliation;
+    const clear = () => { if (this.reconciliation === reconciliation) this.reconciliation = undefined; };
+    void reconciliation.then(clear, clear);
+    return reconciliation;
+  }
 
-      const running = this.db.prepare("SELECT * FROM workspaces WHERE state = 'running'").all() as unknown as WorkspaceRow[];
-      for (const row of running) {
-        const status = await this.agent.status(row.id).catch(() => ({ state: "missing" as const }));
-        if (status.state !== "running") {
-          this.db.prepare("UPDATE workspaces SET state = 'failed', stopped_at = ?, failure = ? WHERE id = ? AND state = 'running'")
-            .run(Date.now(), "The workspace process ended unexpectedly; please retry", row.id);
-          audit(this.db, "workspace.lost", row.wallet, row.id, { agentState: status.state });
-        }
-      }
+  waitForReconciliation() {
+    return this.reconciliation ?? Promise.resolve();
+  }
 
-      let capacity = this.config.maxRunning - this.count("SELECT COUNT(*) AS count FROM workspaces WHERE state IN ('running','provisioning')");
-      while (capacity-- > 0) {
-        const row = this.db.prepare("SELECT * FROM workspaces WHERE state = 'queued' AND lease_expires_at > ? ORDER BY created_at LIMIT 1").get(Date.now()) as WorkspaceRow | undefined;
-        if (!row) break;
-        const claimed = this.db.prepare("UPDATE workspaces SET state = 'provisioning' WHERE id = ? AND state = 'queued'").run(row.id);
-        if (Number(claimed.changes) !== 1) continue;
-        try {
-          await this.agent.create({
-            id: row.id,
-            leaseExpiresAt: row.lease_expires_at,
-            identity: { walletAddress: row.wallet },
-            storage: row.storage_mode === "persistent"
-              ? { mode: "persistent", volumeId: row.volume_id!, quotaBytes: row.storage_quota_bytes }
-              : { mode: "disposable", quotaBytes: row.storage_quota_bytes },
-          });
-          this.db.prepare("UPDATE workspaces SET state = 'running' WHERE id = ? AND state = 'provisioning'").run(row.id);
-          audit(this.db, "workspace.running", row.wallet, row.id);
-        } catch (error) {
-          this.db.prepare("UPDATE workspaces SET state = 'failed', stopped_at = ?, failure = ? WHERE id = ?")
-            .run(Date.now(), "The workspace could not start; please retry", row.id);
-          audit(this.db, "workspace.start_failed", row.wallet, row.id, { error: String(error) });
-        }
+  private async runReconciliation() {
+    this.db.prepare("UPDATE workspaces SET state = 'stopping' WHERE state IN ('queued','provisioning','running') AND lease_expires_at <= ?").run(Date.now());
+    const stopping = this.db.prepare("SELECT * FROM workspaces WHERE state = 'stopping'").all() as unknown as WorkspaceRow[];
+    for (const row of stopping) {
+      const reason = row.lease_expires_at <= Date.now() ? "lease_expired" : "retry";
+      await this.stopWorkspace(row, reason).catch(() => undefined);
+    }
+
+    const active = this.db.prepare("SELECT * FROM workspaces WHERE state IN ('running','provisioning')").all() as unknown as WorkspaceRow[];
+    for (const row of active) {
+      let status: Awaited<ReturnType<AgentClient["status"]>>;
+      try { status = await this.agent.status(row.id); }
+      catch (error) {
+        audit(this.db, "workspace.agent_status_failed", row.wallet, row.id, { error: String(error) });
+        continue;
       }
-    } finally { this.reconciling = false; }
+      if (status.state === "running" && row.state === "provisioning") {
+        this.db.prepare("UPDATE workspaces SET state = 'running' WHERE id = ? AND state = 'provisioning'").run(row.id);
+        audit(this.db, "workspace.running", row.wallet, row.id, { recovered: true });
+        continue;
+      }
+      if (status.state !== "running") {
+        this.db.prepare("UPDATE workspaces SET state = 'failed', stopped_at = ?, failure = ? WHERE id = ? AND state IN ('running','provisioning')")
+          .run(Date.now(), "The workspace process ended unexpectedly; please retry", row.id);
+        audit(this.db, "workspace.lost", row.wallet, row.id, { agentState: status.state });
+      }
+    }
+
+    let capacity = this.config.maxRunning - this.count("SELECT COUNT(*) AS count FROM workspaces WHERE state IN ('running','provisioning','stopping')");
+    while (capacity-- > 0) {
+      const row = this.db.prepare("SELECT * FROM workspaces WHERE state = 'queued' AND lease_expires_at > ? ORDER BY created_at LIMIT 1").get(Date.now()) as WorkspaceRow | undefined;
+      if (!row) break;
+      const claimed = this.db.prepare("UPDATE workspaces SET state = 'provisioning' WHERE id = ? AND state = 'queued'").run(row.id);
+      if (Number(claimed.changes) !== 1) continue;
+      try {
+        await this.agent.create({
+          id: row.id,
+          leaseExpiresAt: row.lease_expires_at,
+          identity: { walletAddress: row.wallet },
+          storage: row.storage_mode === "persistent"
+            ? { mode: "persistent", volumeId: row.volume_id!, quotaBytes: row.storage_quota_bytes }
+            : { mode: "disposable", quotaBytes: row.storage_quota_bytes },
+        });
+        this.db.prepare("UPDATE workspaces SET state = 'running' WHERE id = ? AND state = 'provisioning'").run(row.id);
+        audit(this.db, "workspace.running", row.wallet, row.id);
+      } catch (error) {
+        audit(this.db, "workspace.start_uncertain", row.wallet, row.id, { error: String(error) });
+      }
+    }
+  }
+
+  private scheduleReconciliation() {
+    void this.reconcile().catch((error) => console.error("Workspace reconciliation failed", error));
+  }
+
+  private stopWorkspace(row: WorkspaceRow, reason: string) {
+    const existing = this.stopOperations.get(row.id);
+    if (existing) return existing;
+    const operation = (async () => {
+      try { await this.agent.stop(row.id); }
+      catch (error) {
+        audit(this.db, "workspace.agent_stop_failed", row.wallet, row.id, { error: String(error) });
+        throw this.agentWorkspaceError(error);
+      }
+      const stopped = this.db.prepare("UPDATE workspaces SET state = 'stopped', stopped_at = ? WHERE id = ? AND state = 'stopping'").run(Date.now(), row.id);
+      if (Number(stopped.changes) === 1) audit(this.db, "workspace.stopped", row.wallet, row.id, { reason });
+    })();
+    this.stopOperations.set(row.id, operation);
+    const clear = () => { if (this.stopOperations.get(row.id) === operation) this.stopOperations.delete(row.id); };
+    void operation.then(clear, clear);
+    return operation;
   }
 
   private count(sql: string, ...params: (string | number)[]) {
