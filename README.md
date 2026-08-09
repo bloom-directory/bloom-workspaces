@@ -9,7 +9,7 @@ This repository now includes a working vertical slice for:
 - a curated Alpine image containing Git, compilers, Node, Python, editors, SSH, NFS tools, and a verified static Bloom CLI;
 - policy-controlled HTTP/HTTPS package egress with hostname, DNS, SNI, address, byte, connection, and time limits;
 - browser terminal, authenticated file upload/download, persistent wallet-owned volumes, and structured job APIs with streamed logs and cancellation;
-- watch-only Bloom identity and VFS access, with no signer or transaction capability in the guest;
+- watch-only Bloom identity and VFS access, with transaction signing through Bloom's Sealed Approval ceremony and no signing keys in the guest;
 - short-lived, owner-scoped SSH certificates over a private WebSocket gateway;
 - optional NFSv4 over an NFS-only SSH tunnel, backed by a verified NFSD-enabled QEMU kernel.
 
@@ -58,7 +58,7 @@ Enable curated package access with `BLOOM_VM_EGRESS=controlled`. The default pol
 
 - The workspace shell can run arbitrary commands as UID/GID 1000 inside its own VM. It is not guest root and receives no host, wallet, or platform secret.
 - Persistent storage is a separate quota-bounded ext4 volume keyed to the authenticated wallet. Stopping a VM retains it; the explicit destroy API removes it. Jailed Firecracker currently reports persistence unsupported; QEMU is the complete reference path.
-- `/bloom` is watch-only. The guest can read its wallet-scoped Bloom VFS through `bloom vfs` and `bloom-workspace`, but cannot sign, approve, or submit transactions.
+- `/bloom` is watch-only. The guest can read its wallet-scoped Bloom VFS through `bloom vfs` and `bloom-workspace` and stage transactions to the VFS outbox; approval happens through Bloom's Sealed Approval ceremony, opened at `http://localhost:18734/ceremony/<token>` (typically over SSH `-L 18734:localhost:18734`). The guest holds no signing keys and cannot itself approve or submit transactions.
 - Controlled egress is HTTP/HTTPS package access, not general networking. Private, loopback, link-local, metadata, multicast, reserved, and non-allowlisted destinations are blocked; TLS SNI must match the requested host.
 - SSH grants accept only a user public key, last at most the remaining workspace lease, pin an ephemeral guest host key, and are revoked when the workspace stops. The user's private key never leaves their device.
 - NFS listens only on guest loopback and is reachable solely through an NFS-mode certificate that cannot open a shell or PTY. All NFS identities are squashed to the workspace user.
