@@ -24,7 +24,7 @@ export class QemuRuntime extends PtyRuntime {
     this.storage.set(spec.id, spec.storage);
     try {
       await super.create(spec);
-      await waitForGuestControl((request, timeout) => this.guestRequest(spec.id, request, timeout));
+      await waitForGuestControl((request, timeout) => this.guestRequest(spec.id, request, timeout), this.config.vmAccel === "tcg" ? 300_000 : 20_000);
     }
     catch (error) {
       await this.stop(spec.id, "guest control failed readiness").catch(() => undefined);
@@ -53,9 +53,10 @@ export class QemuRuntime extends PtyRuntime {
     return {
       file: this.config.qemuBin,
       args: [
-        "-machine", "q35,accel=kvm",
+        "-machine", "q35",
+        "-accel", this.config.vmAccel === "tcg" ? "tcg,thread=multi" : "kvm",
         "-sandbox", "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny",
-        "-cpu", "host",
+        "-cpu", this.config.vmCpu,
         "-smp", String(this.config.vmVcpus),
         "-m", String(this.config.vmMemoryMib),
         "-kernel", this.config.vmKernel,

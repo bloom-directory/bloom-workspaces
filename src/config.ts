@@ -57,6 +57,7 @@ const Env = z.object({
   BLOOM_QEMU_BIN: z.string().default("qemu-system-x86_64"),
   BLOOM_VM_MEMORY_MIB: z.coerce.number().int().min(128).max(8192).default(512),
   BLOOM_VM_VCPUS: z.coerce.number().int().min(1).max(8).default(1),
+  BLOOM_VM_ACCEL: z.enum(["kvm", "tcg"]).default("kvm"),
   BLOOM_VM_EGRESS: z.enum(["none", "controlled", "internet"]).default("none"),
   BLOOM_EGRESS_ALLOWED_HOSTS: hostList,
   BLOOM_EGRESS_MAX_CONNECTIONS: z.coerce.number().int().min(1).max(256).default(32),
@@ -110,6 +111,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env, role: "all" 
     qemuBin: env.BLOOM_QEMU_BIN.includes("/") ? resolve(env.BLOOM_QEMU_BIN) : env.BLOOM_QEMU_BIN,
     vmMemoryMib: env.BLOOM_VM_MEMORY_MIB,
     vmVcpus: env.BLOOM_VM_VCPUS,
+    vmAccel: env.BLOOM_VM_ACCEL,
+    vmCpu: env.BLOOM_VM_ACCEL === "tcg" ? "max" : "host",
     vmEgress: env.BLOOM_VM_EGRESS,
     egressAllowedHosts: env.BLOOM_EGRESS_ALLOWED_HOSTS,
     egressMaxConnections: env.BLOOM_EGRESS_MAX_CONNECTIONS,
@@ -145,6 +148,7 @@ function assertSafeConfiguration(config: {
   sessionSecret: string;
   agentToken: string;
   vmEgress: string;
+  vmAccel: string;
   firecrackerJailed: boolean;
   sshEnabled: boolean;
   sshCaKeyPath: string | undefined;
@@ -168,6 +172,7 @@ function assertSafeConfiguration(config: {
   if (config.agentToken.includes("change-me") || Buffer.byteLength(config.agentToken) < 32) errors.push("BLOOM_AGENT_TOKEN must be at least 32 random bytes");
   if (config.vmEgress === "internet") errors.push("unfiltered QEMU user-mode egress is forbidden; deploy an audited egress proxy first");
   if (config.runtime === "firecracker" && !config.firecrackerJailed) errors.push("Firecracker must run through the jailer");
+  if (config.vmAccel === "tcg") errors.push("software emulation (TCG) is forbidden in public mode; use KVM");
   if (errors.length) throw new Error(`Unsafe public configuration: ${errors.join("; ")}`);
 }
 
