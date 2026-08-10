@@ -162,6 +162,15 @@ export class WorkspaceService {
     } catch (error) { throw this.agentWorkspaceError(error); }
   }
 
+  async ceremonyApprove(wallet: string, id: string, txId: string, assertion: { credentialId: string; authenticatorData: string; clientDataJSON: string; signature: string }) {
+    const row = this.ownedRunning(wallet, id, "ceremony_approve");
+    try {
+      const result = await this.agent.ceremonyApprove(row.id, txId, assertion);
+      audit(this.db, "workspace.ceremony_approved", row.wallet, row.id, { txId });
+      return result;
+    } catch (error) { throw this.agentWorkspaceError(error); }
+  }
+
   async connections(wallet: string, id: string) {
     const row = this.ownedRunning(wallet, id, "connections");
     try { return await this.agent.connections(row.id); }

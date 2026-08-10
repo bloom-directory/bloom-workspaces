@@ -20,6 +20,15 @@ const Environment = z.record(
 
 const Envelope = z.object({ version: z.literal(GUEST_PROTOCOL_VERSION), id: RequestId });
 
+const AssertionBase64 = z.string().max(8192).refine(isCanonicalBase64, "invalid base64");
+/** WebAuthn assertion relayed through the control plane to the in-guest verifier. */
+export const CeremonyAssertion = z.object({
+  credentialId: AssertionBase64,
+  authenticatorData: AssertionBase64,
+  clientDataJSON: AssertionBase64,
+  signature: AssertionBase64,
+}).strict();
+
 export const GuestRequest = z.discriminatedUnion("operation", [
   Envelope.extend({ operation: z.literal("hello") }),
   Envelope.extend({ operation: z.literal("fs.list"), path: WorkspaceDirectory }),
@@ -61,6 +70,7 @@ export const GuestRequest = z.discriminatedUnion("operation", [
     nfs: z.boolean(),
   }),
   Envelope.extend({ operation: z.literal("ceremony.pending") }),
+  Envelope.extend({ operation: z.literal("ceremony.approve"), txId: RequestId, assertion: CeremonyAssertion }),
 ]);
 
 export type GuestRequest = z.infer<typeof GuestRequest>;

@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { Config } from "../config.js";
 import { runtimeCapabilities } from "../capabilities.js";
 import { BloomGuestStatus } from "../guest/results.js";
+import { CeremonyAssertion, GUEST_PROTOCOL_VERSION } from "../guest-protocol.js";
 import { GuestJobs, type GuestRequestCall } from "../jobs/client.js";
 import { StructuredJobSpec } from "../jobs/model.js";
 import { safeEqual } from "../security.js";
@@ -29,6 +30,7 @@ const CreateBody = z.object({ id: z.string().uuid(), leaseExpiresAt: z.number().
 const WorkspaceIdentity = z.object({ walletAddress: z.string().regex(/^0x[0-9a-f]{40}$/) }).strict();
 const CreateWorkspaceBody = CreateBody.extend({ identity: WorkspaceIdentity.optional() }).strict();
 const FilePath = z.string().max(4_096);
+const CeremonyApproveBody = z.object({ assertion: CeremonyAssertion }).strict();
 const TerminalInput = z.discriminatedUnion("type", [
   z.object({ type: z.literal("input"), data: z.string().max(65_536) }),
   z.object({ type: z.literal("resize"), cols: z.number().int(), rows: z.number().int() }),
@@ -206,7 +208,16 @@ export async function startAgent(config: Config, runtime: WorkspaceRuntime) {
   app.get("/v1/workspaces/:id/ceremony", async (request, response, next) => {
     try {
       const call = requireGuest(runtime, request.params.id ?? "");
-      const result = await call({ version: 1, id: `ceremony_pending_${(request.params.id ?? "").replaceAll("-", "")}`, operation: "ceremony.pending" }, 10_000);
+      const result = await call({ version: GUEST_PROTOCOL_VERSION, id: `ceremony_pending_${(request.params.id ?? "").replaceAll("-", "")}`, operation: "ceremony.pending" }, 10_000);
+      response.json(result);
+    } catch (error) { next(error); }
+  });
+  app.post("/v1/workspaces/:id/ceremony/:txId/approve", async (request, response, next) => {
+    try {
+      const call = requireGuest(runtime, request.params.id ?? "");
+      const body = CeremonyApproveBody.parse(request.body);
+      const txId = String(request.params.txId ?? "");
+      const result = await call({ version: GUEST_PROTOCOL_VERSION, id: `ceremony_approve_${txId.replaceAll("-", "")}`, operation: "ceremony.approve", txId, assertion: body.assertion }, 10_000);
       response.json(result);
     } catch (error) { next(error); }
   });

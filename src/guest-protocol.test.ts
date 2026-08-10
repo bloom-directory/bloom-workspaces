@@ -51,9 +51,15 @@ describe("guest control protocol", () => {
     expect(GuestRequest.safeParse({ ...request, caPublicKey: "-----BEGIN OPENSSH PRIVATE KEY-----" }).success).toBe(false);
   });
 
-  it("accepts ceremony.pending and rejects unknown operations", () => {
+  it("accepts ceremony operations and rejects unknown operations", () => {
     const validCeremony = { ...envelope, operation: "ceremony.pending" };
     expect(GuestRequest.safeParse(validCeremony).success).toBe(true);
+
+    const assertion = { credentialId: Buffer.alloc(16).toString("base64"), authenticatorData: Buffer.alloc(37).toString("base64"), clientDataJSON: Buffer.alloc(64).toString("base64"), signature: Buffer.alloc(70).toString("base64") };
+    const validApprove = { ...envelope, operation: "ceremony.approve", txId: "tx_abc123", assertion };
+    expect(GuestRequest.safeParse(validApprove).success).toBe(true);
+    expect(GuestRequest.safeParse({ ...validApprove, assertion: { ...assertion, signature: "not-base64!!!" } }).success).toBe(false);
+    expect(GuestRequest.safeParse({ ...validApprove, txId: undefined }).success).toBe(false);
 
     // Old outbox operations are no longer in the protocol — must be rejected
     expect(GuestRequest.safeParse({ ...envelope, operation: "outbox.confirm", txId: "tx_abc123", chain: "8453", wallet: "my-wallet", confirmText: "confirmed" }).success).toBe(false);

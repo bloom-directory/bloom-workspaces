@@ -15,6 +15,7 @@ import { verifyTurnstile } from "./turnstile.js";
 import { WorkspaceError, WorkspaceService } from "./workspaces.js";
 import { StructuredJobSpec, isTerminalJobState } from "../jobs/model.js";
 import { SshLeaseBody } from "../ssh/api.js";
+import { CeremonyAssertion } from "../guest-protocol.js";
 import { createSshClientArgv } from "../ssh/client-plan.js";
 import { createNfsClientPlan } from "../nfs/client-plan.js";
 import { TerminalAdmission } from "./terminal-admission.js";
@@ -267,6 +268,13 @@ export async function startControlPlane(config: Config, db: BloomDatabase) {
     try {
       const { session } = response.locals.context as { session: Session };
       response.json(await workspaces.ceremonyPending(session.wallet, String(request.params.id ?? "")));
+    } catch (error) { next(error); }
+  });
+  app.post("/api/workspaces/:id/ceremony/:txId/approve", requireSession, async (request, response, next) => {
+    try {
+      const { session } = response.locals.context as { session: Session };
+      const body = z.object({ assertion: CeremonyAssertion }).strict().parse(request.body);
+      response.json(await workspaces.ceremonyApprove(session.wallet, String(request.params.id ?? ""), String(request.params.txId ?? ""), body.assertion));
     } catch (error) { next(error); }
   });
   app.get("/api/workspaces/:id/connections", requireSession, async (request, response, next) => {

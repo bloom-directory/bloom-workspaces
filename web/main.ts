@@ -530,6 +530,41 @@ function closeWorkspaceResources() {
   window.clearTimeout(leaseTimer);
 }
 
+type CeremonyRequest = { id: string; chain: string; wallet: string; planMd: string; ceremonyUrl: string | null; challenge: string | null };
+
+function base64ToUint8(value: string): Uint8Array<ArrayBuffer> {
+  const binary = window.atob(value);
+  const bytes = new Uint8Array(new ArrayBuffer(binary.length));
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function uint8ToBase64(bytes: ArrayBuffer | Uint8Array): string {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let binary = "";
+  for (let i = 0; i < view.byteLength; i += 1) binary += String.fromCharCode(view[i]);
+  return window.btoa(binary);
+}
+
+async function approveCeremony(workspaceId: string, request: CeremonyRequest): Promise<boolean> {
+  if (!request.challenge || typeof PublicKeyCredential !== "function" || !navigator.credentials) return false;
+  const credential = await navigator.credentials.get({
+    publicKey: { challenge: base64ToUint8(request.challenge), timeout: 60_000, userVerification: "required" },
+  });
+  if (!(credential instanceof PublicKeyCredential)) return false;
+  const response = credential.response as AuthenticatorAssertionResponse;
+  const result = await api<{ approved: boolean }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/ceremony/${encodeURIComponent(request.id)}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ assertion: {
+      credentialId: uint8ToBase64(credential.rawId),
+      authenticatorData: uint8ToBase64(response.authenticatorData),
+      clientDataJSON: uint8ToBase64(response.clientDataJSON),
+      signature: uint8ToBase64(response.signature),
+    } }),
+  });
+  return result.approved === true;
+}
+
 function closeCeremonyPoll() {
   window.clearInterval(ceremonyPollTimer);
   ceremonyPollTimer = undefined;
@@ -541,18 +576,18 @@ function startCeremonyPoll(workspaceId: string) {
   ceremonyPollTimer = window.setInterval(async () => {
     if (!session.authenticated) return;
     try {
-      const result = await api<{ requests: { id: string; chain: string; wallet: string; planMd: string; ceremonyUrl: string | null }[] }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/ceremony`);
+      const result = await api<{ requests: CeremonyRequest[] }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/ceremony`);
       for (const request of result.requests) {
         if (seen.has(request.id)) continue;
         seen.add(request.id);
-        showCeremonyNotification(request);
+        showCeremonyNotification(workspaceId, request);
       }
       if (seen.size > 50) { const keep = new Set(result.requests.map((r) => r.id)); for (const id of seen) if (!keep.has(id)) seen.delete(id); }
     } catch { /* workspace may have stopped */ }
   }, 3_000);
 }
 
-function showCeremonyNotification(request: { id: string; chain: string; wallet: string; planMd: string; ceremonyUrl: string | null }) {
+function showCeremonyNotification(workspaceId: string, request: CeremonyRequest) {
   const banner = document.createElement("div");
   banner.className = "ceremony-notification";
   banner.setAttribute("role", "alert");
@@ -566,16 +601,54 @@ function showCeremonyNotification(request: { id: string; chain: string; wallet: 
 
   banner.append(title, plan);
 
-  if (request.ceremonyUrl) {
+  const relaySupported = Boolean(request.challenge && typeof PublicKeyCredential === "function" && navigator.credentials);
+
+  if (relaySupported) {
+    const statusLine = document.createElement("p");
+    statusLine.className = "ceremony-status";
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.className = "ceremony-approve";
+    approve.textContent = "Approve";
+    approve.addEventListener("click", async () => {
+      approve.disabled = true;
+      approve.textContent = "Approving…";
+      statusLine.textContent = "";
+      try {
+        const approved = await approveCeremony(workspaceId, request);
+        if (approved) { banner.remove(); return; }
+        statusLine.textContent = "Approval was not accepted. Retry or use the SSH ceremony below.";
+        approve.textContent = "Approve";
+      } catch (error) {
+        statusLine.textContent = `Approval failed: ${error instanceof Error ? error.message : String(error)}`;
+        approve.textContent = "Retry approval";
+      } finally {
+        approve.disabled = false;
+      }
+    });
+    banner.append(approve, statusLine);
+
+    if (request.ceremonyUrl) {
+      const advanced = document.createElement("details");
+      advanced.className = "ceremony-advanced";
+      const summary = document.createElement("summary");
+      summary.textContent = "Advanced: approve over SSH instead";
+      const link = document.createElement("a");
+      link.href = request.ceremonyUrl;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "Open approval ceremony →";
+      advanced.append(summary, link);
+      banner.append(advanced);
+    }
+  } else if (request.ceremonyUrl) {
     const link = document.createElement("a");
     link.href = request.ceremonyUrl;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     link.className = "ceremony-link";
     link.textContent = "Open approval ceremony →";
-    link.addEventListener("click", () => {
-      setTimeout(() => { banner.remove(); }, 5_000);
-    });
+    link.addEventListener("click", () => { setTimeout(() => { banner.remove(); }, 5_000); });
     banner.append(link);
   } else {
     const hint = document.createElement("p");

@@ -15,7 +15,7 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { while (cleanups.length) await cleanups.pop()?.(); });
 
 async function setup() {
-  const directory = await mkdtemp(join(tmpdir(), "bloom-http-sec-"));
+  const directory = await mkdtemp(join(tmpdir(), "bloom-ceremony-relay-"));
   const config = testConfig(directory);
   const db = openDatabase(config.databasePath);
   const agent = await startAgent(config, new ProcessRuntime(config.dataDir, [], true));
@@ -34,60 +34,83 @@ async function setup() {
   return { control, config, db, cookie, csrf, workspaceId };
 }
 
-describe("HTTP security: ceremony endpoint", () => {
-  it("rejects requests without authentication", async () => {
-    const { control, workspaceId } = await setup();
+function validAssertion() {
+  return { assertion: {
+    credentialId: randomBytes(16).toString("base64"),
+    authenticatorData: randomBytes(37).toString("base64"),
+    clientDataJSON: Buffer.from(JSON.stringify({ type: "webauthn.get", challenge: "x", origin: "http://127.0.0.1:8787" })).toString("base64"),
+    signature: randomBytes(64).toString("base64"),
+  } };
+}
 
-    const response = await request(control.app)
-      .get(`/api/workspaces/${workspaceId}/ceremony`);
+describe("Ceremony relay (process runtime, mock guest)", () => {
+  it("surfaces a pending request with a relay challenge", async () => {
+    const { control, config, cookie, csrf, workspaceId } = await setup();
+    const response = await request(control.app).get(`/api/workspaces/${workspaceId}/ceremony`).set(headers(config.origin, cookie, csrf));
+    expect(response.status).toBe(200);
+    expect(response.body.requests).toHaveLength(1);
+    const pending = response.body.requests[0];
+    expect(pending.id).toBe(`dev_mock_${workspaceId}`);
+    expect(typeof pending.challenge).toBe("string");
+    expect(pending.challenge.length).toBeGreaterThan(0);
+  });
+
+  it("approves a pending request via the relay and resolves it", async () => {
+    const { control, config, cookie, csrf, workspaceId } = await setup();
+    const txId = `dev_mock_${workspaceId}`;
+    const approve = await request(control.app).post(`/api/workspaces/${workspaceId}/ceremony/${txId}/approve`)
+      .set(headers(config.origin, cookie, csrf)).send(validAssertion());
+    expect(approve.status).toBe(200);
+    expect(approve.body.approved).toBe(true);
+    const after = await request(control.app).get(`/api/workspaces/${workspaceId}/ceremony`).set(headers(config.origin, cookie, csrf));
+    expect(after.body.requests).toHaveLength(0);
+  });
+
+  it("rejects approval without authentication", async () => {
+    const { control, config, workspaceId } = await setup();
+    const response = await request(control.app).post(`/api/workspaces/${workspaceId}/ceremony/tx_unknown/approve`)
+      .set("origin", config.origin).send(validAssertion());
     expect(response.status).toBe(401);
   });
 
-  it("rejects requests from other wallets (workspace not owned)", async () => {
+  it("rejects approval from a wallet that does not own the workspace", async () => {
     const { control, config, db, workspaceId } = await setup();
     const outsider = createTestSession(db, config, "wallet-b");
-
-    const response = await request(control.app)
-      .get(`/api/workspaces/${workspaceId}/ceremony`)
-      .set("cookie", outsider.cookie);
+    const txId = `dev_mock_${workspaceId}`;
+    const response = await request(control.app).post(`/api/workspaces/${workspaceId}/ceremony/${txId}/approve`)
+      .set({ origin: config.origin, cookie: outsider.cookie, "x-csrf-token": outsider.csrf }).send(validAssertion());
     expect(response.status).toBe(404);
   });
 
-  it("returns ceremony info for the workspace owner", async () => {
+  it("returns 404 for an unknown ceremony request", async () => {
     const { control, config, cookie, csrf, workspaceId } = await setup();
+    const response = await request(control.app).post(`/api/workspaces/${workspaceId}/ceremony/tx_missing/approve`)
+      .set(headers(config.origin, cookie, csrf)).send(validAssertion());
+    expect(response.status).toBe(404);
+  });
 
-    const response = await request(control.app)
-      .get(`/api/workspaces/${workspaceId}/ceremony`)
-      .set(headers(config.origin, cookie, csrf));
-    expect(response.status).toBe(200);
-    expect(response.body.requests).toBeInstanceOf(Array);
-    expect(response.body.requests.length).toBeGreaterThan(0);
-    expect(typeof response.body.requests[0].challenge).toBe("string");
+  it("rejects a malformed assertion body", async () => {
+    const { control, config, cookie, csrf, workspaceId } = await setup();
+    const txId = `dev_mock_${workspaceId}`;
+    const response = await request(control.app).post(`/api/workspaces/${workspaceId}/ceremony/${txId}/approve`)
+      .set(headers(config.origin, cookie, csrf)).send({ assertion: { credentialId: "not-base64!!!" } });
+    expect(response.status).toBe(400);
   });
 });
 
-describe("HTTP: metrics endpoint", () => {
-  it("returns workspace counts and process stats", async () => {
-    const { control } = await setup();
-
-    const response = await request(control.app).get("/metricsz");
-    expect(response.status).toBe(200);
-    expect(response.body).toHaveProperty("workspaces");
-    expect(response.body.workspaces).toHaveProperty("running");
-    expect(response.body.workspaces).toHaveProperty("total");
-    expect(response.body.workspaces.total).toBeGreaterThanOrEqual(1);
-    expect(response.body).toHaveProperty("uptimeSeconds");
-    expect(response.body).toHaveProperty("memoryUsage");
-    expect(response.body.memoryUsage).toHaveProperty("rssBytes");
-  });
-});
-
-describe("HTTP: healthz endpoint", () => {
-  it("returns ok when agent is healthy", async () => {
-    const { control } = await setup();
-    const response = await request(control.app).get("/healthz");
-    expect(response.status).toBe(200);
-    expect(response.body.ok).toBe(true);
+describe("Ceremony relay: public mode forbids the mock", () => {
+  it("rejects BLOOM_DEV_MOCK_CEREMONY in public mode", () => {
+    expect(() => loadConfig({
+      BLOOM_ORIGIN: "https://workspaces.example.com",
+      BLOOM_PUBLIC_MODE: "1",
+      BLOOM_DEV_AUTH: "0",
+      BLOOM_DEV_MOCK_CEREMONY: "1",
+      BLOOM_RUNTIME: "qemu",
+      BLOOM_TURNSTILE_SITE_KEY: "x",
+      BLOOM_TURNSTILE_SECRET: "x",
+      BLOOM_SESSION_SECRET: randomBytes(48).toString("hex"),
+      BLOOM_AGENT_TOKEN: randomBytes(48).toString("hex"),
+    })).toThrow(/BLOOM_DEV_MOCK_CEREMONY is forbidden/);
   });
 });
 
@@ -102,6 +125,7 @@ function testConfig(directory: string): Config {
       BLOOM_SESSION_SECRET: randomBytes(32).toString("hex"),
       BLOOM_RUNTIME: "process",
       BLOOM_DEV_AUTH: "1",
+      BLOOM_DEV_MOCK_CEREMONY: "1",
       BLOOM_DAILY_PER_WALLET: "20",
       BLOOM_DAILY_PER_IP: "20",
     }),

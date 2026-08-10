@@ -33,6 +33,8 @@ const Env = z.object({
   BLOOM_SESSION_SECRET: z.string().default("local-session-secret-change-me"),
   BLOOM_RUNTIME: z.enum(["process", "qemu", "firecracker"]).default("process"),
   BLOOM_DEV_AUTH: booleanString,
+  BLOOM_DEV_MOCK_CEREMONY: booleanString,
+  BLOOM_DEV_REAL_BLOOM: booleanString,
   BLOOM_PUBLIC_MODE: booleanString,
   BLOOM_TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   BLOOM_TURNSTILE_SITE_KEY: z.string().optional(),
@@ -55,6 +57,7 @@ const Env = z.object({
   BLOOM_JAILER_CHROOT_BASE: z.string().default("/run/bloom-jailer"),
   BLOOM_RUNTIME_SOCKET_DIR: z.string().default("/tmp/bloom-workspaces-vm"),
   BLOOM_QEMU_BIN: z.string().default("qemu-system-x86_64"),
+  BLOOM_BLOOM_BIN: z.string().default("bloom"),
   BLOOM_VM_MEMORY_MIB: z.coerce.number().int().min(128).max(8192).default(512),
   BLOOM_VM_VCPUS: z.coerce.number().int().min(1).max(8).default(1),
   BLOOM_VM_ACCEL: z.enum(["kvm", "tcg"]).default("kvm"),
@@ -87,6 +90,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env, role: "all" 
     sessionSecret: env.BLOOM_SESSION_SECRET,
     runtime: env.BLOOM_RUNTIME,
     devAuth: env.BLOOM_DEV_AUTH,
+    devMockCeremony: env.BLOOM_DEV_MOCK_CEREMONY,
+    devRealBloom: env.BLOOM_DEV_REAL_BLOOM,
     publicMode: env.BLOOM_PUBLIC_MODE,
     trustedProxyHops: env.BLOOM_TRUSTED_PROXY_HOPS,
     turnstileSiteKey: env.BLOOM_TURNSTILE_SITE_KEY,
@@ -109,6 +114,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env, role: "all" 
     jailerChrootBase: resolve(env.BLOOM_JAILER_CHROOT_BASE),
     runtimeSocketDir: resolve(env.BLOOM_RUNTIME_SOCKET_DIR),
     qemuBin: env.BLOOM_QEMU_BIN.includes("/") ? resolve(env.BLOOM_QEMU_BIN) : env.BLOOM_QEMU_BIN,
+    bloomBin: env.BLOOM_BLOOM_BIN.includes("/") ? resolve(env.BLOOM_BLOOM_BIN) : env.BLOOM_BLOOM_BIN,
     vmMemoryMib: env.BLOOM_VM_MEMORY_MIB,
     vmVcpus: env.BLOOM_VM_VCPUS,
     vmAccel: env.BLOOM_VM_ACCEL,
@@ -142,6 +148,8 @@ function assertSafeConfiguration(config: {
   origin: string;
   runtime: string;
   devAuth: boolean;
+  devMockCeremony: boolean;
+  devRealBloom: boolean;
   publicMode: boolean;
   turnstileSiteKey: string | undefined;
   turnstileSecret: string | undefined;
@@ -166,6 +174,8 @@ function assertSafeConfiguration(config: {
   const errors: string[] = [];
   if (role !== "agent" && !config.origin.startsWith("https://")) errors.push("BLOOM_ORIGIN must use HTTPS");
   if (role !== "agent" && config.devAuth) errors.push("BLOOM_DEV_AUTH must be disabled");
+  if (config.devMockCeremony) errors.push("BLOOM_DEV_MOCK_CEREMONY is forbidden in public mode");
+  if (config.devRealBloom) errors.push("BLOOM_DEV_REAL_BLOOM is forbidden in public mode");
   if (config.runtime === "process") errors.push("the process runtime is forbidden");
   if (role !== "agent" && (!config.turnstileSiteKey || !config.turnstileSecret)) errors.push("Turnstile keys are required");
   if (role !== "agent" && (config.sessionSecret.includes("change-me") || Buffer.byteLength(config.sessionSecret) < 32)) errors.push("BLOOM_SESSION_SECRET must be at least 32 random bytes");
