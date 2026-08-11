@@ -530,7 +530,7 @@ function closeWorkspaceResources() {
   window.clearTimeout(leaseTimer);
 }
 
-type CeremonyRequest = { id: string; chain: string; wallet: string; planMd: string; ceremonyUrl: string | null; challenge: string | null };
+type CeremonyRequest = { id: string; chain: string; wallet: string; planMd: string; ceremonyUrl: string | null; challenge: string | null; intent: string | null; signing: "ceremony" | "custody" };
 
 function base64ToUint8(value: string): Uint8Array<ArrayBuffer> {
   const binary = window.atob(value);
@@ -603,7 +603,16 @@ function showCeremonyNotification(workspaceId: string, request: CeremonyRequest)
 
   const relaySupported = Boolean(request.challenge && typeof PublicKeyCredential === "function" && navigator.credentials);
 
-  if (relaySupported) {
+  if (request.signing === "custody") {
+    const note = document.createElement("p");
+    note.className = "ceremony-hint";
+    note.textContent = "Watch-only workspace — the signing key lives on your device, not here. Review the plan above, then in your local bloom run:";
+    const cmd = document.createElement("pre");
+    cmd.className = "ceremony-plan";
+    const intent = request.intent ?? "{}";
+    cmd.textContent = `bloom wallet stage ${request.wallet} ${request.chain} --intent '${intent}'\n# then, with the returned <id>:\nbloom wallet confirm ${request.wallet} ${request.chain} <id>`;
+    banner.append(note, cmd);
+  } else if (relaySupported) {
     const statusLine = document.createElement("p");
     statusLine.className = "ceremony-status";
     const approve = document.createElement("button");

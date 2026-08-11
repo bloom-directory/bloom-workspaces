@@ -58,9 +58,10 @@ export class RealBloom {
       let txIds: string[] = [];
       try { txIds = await readdir(pendingDir); } catch { continue; }
       for (const txId of txIds) {
-        const planMd = await this.readPlan(pendingDir, txId);
-        if (planMd === undefined) continue;
-        requests.push({ id: txId, chain, wallet: this.wallet, planMd, ceremonyUrl: null, challenge: this.challengeFor(txId, planMd) });
+        const planMd = await this.readFileText(pendingDir, txId, "plan.md");
+        if (planMd === null) continue;
+        const intent = await this.readFileText(pendingDir, txId, "intent.json");
+        requests.push({ id: txId, chain, wallet: this.wallet, planMd, ceremonyUrl: null, challenge: this.challengeFor(txId, planMd), intent, signing: "custody" });
       }
     }
     return { requests };
@@ -78,8 +79,8 @@ export class RealBloom {
     return false;
   }
 
-  private async readPlan(pendingDir: string, txId: string): Promise<string | undefined> {
-    try { return await readFile(join(pendingDir, txId, "plan.md"), "utf8"); } catch { return undefined; }
+  private async readFileText(pendingDir: string, txId: string, name: string): Promise<string | null> {
+    try { return await readFile(join(pendingDir, txId, name), "utf8"); } catch { return null; }
   }
 
   private challengeFor(txId: string, planMd: string): string {

@@ -21,6 +21,10 @@ export type CeremonyRequestView = {
   planMd: string;
   ceremonyUrl: string | null;
   challenge: string;
+  /** Original staged intent JSON, surfaced so the user can re-stage and sign in their own (custody-holding) bloom. Null when not available. */
+  intent: string | null;
+  /** "ceremony" = approve in-workspace (mock/relay test path); "custody" = watch-only wallet, must sign on your own device. */
+  signing: "ceremony" | "custody";
 };
 
 export class MockCeremonyStore {
@@ -38,6 +42,8 @@ export class MockCeremonyStore {
         planMd: request.planMd,
         ceremonyUrl: null,
         challenge: this.challengeFor(request),
+        intent: null,
+        signing: "ceremony" as const,
       }));
     return { requests };
   }
