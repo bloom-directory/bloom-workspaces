@@ -1,5 +1,11 @@
 # Bloom Workspaces finish plan
 
+> **STATUS (2026-08-11): STALE.** This was the resume checkpoint from the
+> pre-ceremony-rewrite era (paused 2026-08-05). Many "must rerun" items here
+> predate the Sealed Approval ceremony, the custody-handoff work, and bloom-mcp.
+> Treat as historical context only; the current state lives in the README,
+> `docs/ceremony-relay.md`, `docs/mcp-plan.md`, and `docs/issues/`.
+
 This is the durable resume checkpoint for the capability-expansion work paused
 on 2026-08-05. Do not discard or reset the current worktree: the implementation
 is intentionally uncommitted and includes all product slices described below.
