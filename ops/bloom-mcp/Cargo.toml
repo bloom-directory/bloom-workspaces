@@ -1,0 +1,30 @@
+[package]
+name = "bloom-mcp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "MCP server exposing bloom wallet operations to AI clients (Claude Desktop, ChatGPT, etc.)"
+
+[[bin]]
+name = "bloom-mcp"
+path = "src/main.rs"
+
+[features]
+# Default = local stdio server (Claude Desktop spawns it). Enable `http` to also
+# build the streamable-HTTP server mode for remote/server deployment.
+default = []
+http = ["dep:axum", "rmcp/transport-streamable-http-server"]
+
+[dependencies]
+rmcp = { version = "3", features = ["server", "transport-io", "macros", "schemars"] }
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
