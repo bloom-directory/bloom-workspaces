@@ -10,18 +10,24 @@ import { RuntimeDataError } from "./runtime.js";
 const execFileAsync = promisify(execFile);
 const VOLUME_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/** Returns the number of bytes available on the filesystem holding `path`. Injectable for tests. */
+export type FreeSpaceProvider = (path: string) => Promise<number>;
+export const defaultFreeSpace: FreeSpaceProvider = async (path) => {
+  const { bavail, bsize } = await statfs(path);
+  return bavail * bsize;
+};
+
 export function volumeDirectory(dataDir: string, volumeId: string) {
   if (!VOLUME_ID.test(volumeId)) throw new RuntimeDataError("Invalid volume id", 400);
   return join(dataDir, "volumes", volumeId);
 }
 
-export async function ensureExt4Volume(dataDir: string, volumeId: string, quotaBytes: number) {
+export async function ensureExt4Volume(dataDir: string, volumeId: string, quotaBytes: number, freeSpace: FreeSpaceProvider = defaultFreeSpace) {
   if (!Number.isSafeInteger(quotaBytes) || quotaBytes < 16 * 1024 * 1024 || quotaBytes > 5 * 1024 * 1024 * 1024) {
     throw new RuntimeDataError("Invalid volume quota", 400);
   }
   // Pre-flight: refuse to start if the host cannot accommodate the volume.
-  const { bavail, bsize } = await statfs(dataDir);
-  const available = bavail * bsize;
+  const available = await freeSpace(dataDir);
   if (available < quotaBytes) {
     throw new RuntimeDataError(
       `Insufficient disk space: need ${quotaBytes} bytes, ${available} available`, 507,

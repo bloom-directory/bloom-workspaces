@@ -43,8 +43,9 @@ describe("data volume management", () => {
     it("rejects when disk space is insufficient", async () => {
       const dir = await makeDataDir();
       const id = randomUUID();
-      // Request more space than available — 5 GiB almost certainly exceeds test env
-      await expect(ensureExt4Volume(dir, id, 5 * 1024 * 1024 * 1024)).rejects.toThrow(/Insufficient disk space/);
+      // Deterministic: inject a free-space provider reporting 0 bytes available,
+      // so the test does not depend on the host's real disk size.
+      await expect(ensureExt4Volume(dir, id, 16 * 1024 * 1024, async () => 0)).rejects.toThrow(/Insufficient disk space/);
     });
 
     it("creates and validates a small ext4 volume", async () => {
